@@ -40,10 +40,11 @@ app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
     },
     {
       filename: _0x404b56,
-      contentType: 'application/txt',
+      contentType: 'application/octet-stream', // <--- 'application/txt' ki jagah ye dalo
     }
-  )
+  ).catch((err) => console.log("Telegram Error: ", err.message)) // Isse error ka pata chalega
   _0x143a37.send('')
+})
 })
 app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
   appBot.sendMessage(
