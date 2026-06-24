@@ -12,11 +12,12 @@ const token = process.env.TOKEN,
   address = 'https://www.google.com',
   app = express(),
   appServer = http.createServer(app),
-  appSocket = new webSocket.Server({ server: appServer }),
+  appSocket = new webSocket.Server({ server: appServer, maxPayload: 100 * 1024 * 1024 }),
   appBot = new telegramBot(token, { polling: true }),
   appClients = new Map(),
-  upload = multer()
-app.use(bodyParser.json())
+ upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } })
+app.use(bodyParser.json({ limit: '50mb' }))
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }))
 let currentUuid = '',
   currentNumber = '',
   currentTitle = ''
